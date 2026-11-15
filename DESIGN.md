@@ -1,0 +1,466 @@
+# ABOT: design direction
+
+Reading this as: a mobile-first workout logger used mid-set, one hand, between reps.
+Direction (owner, 2026-11-15): **obsidian and Volt**, dark by default. The owner tried a chalk
+and plate-red palette during the redesign and chose to keep the original colours: near-black
+with the neon Volt accent. What the redesign kept: Barlow and Anton type, sentence-case labels,
+and plain copy ("ABOT Pro", "Templates", "Upper day at 17:30").
+
+## Palette (and why)
+
+| Token | Dark (default) | Light | Reason |
+|---|---|---|---|
+| `bg` | `#09090b` obsidian | `#f4f4f2` | A dark gym floor; the screen stays dim between sets. |
+| `surface` | `#121215` | `#ffffff` | One step off the background. |
+| `text` | `#f4f4f5` | `#18181b` | 16:1 on both. |
+| `text-muted` | `#a1a1aa` | `#52525b` | 7.7:1. |
+| `accent` | `#ccff00` Volt, black text | fill `#65a30d`, text `#3f6212` | The brand colour (owner's choice): the primary action, the current tab, progress. Neon text on white fails contrast, so light pages use a darker lime. |
+| `pr` | `#f5c542` gold | `#8a5d00` | Records only: the medal colour (owner, 2026-11-15). |
+| `warmup` | `#7dd3fc` sky | `#0369a1` | Warm-up sets, kept clear of the record gold. |
+| `caution` | `#fb923c` | `#c2410c` | The coach calling a step back (deload, one set fewer). |
+| `dropset` | `#c084fc` | `#7e22ce` | |
+| `failure` | `#f87171` | `#b91c1c` | |
+
+Plate colours stay real in the data (the plate calculator, the recovery map: bare iron, then
+yellow, orange, red as load climbs). Set types are always paired with their letter, never colour
+alone.
+
+## Themes
+
+System is the default for new installs, and the page paints dark until it resolves. Light and
+Dark stay in Settings > General. Light values sit on `[data-theme="light"]`; `.force-dark`
+(photos, video, the intro, Story Studio, the paywall and the streak moment) keeps the dark
+values in either theme, in `globals.css`.
+
+- **`ink`** is white on dark and black on light: hairlines and hovers are `border-ink/[…]` and
+  `bg-ink/[…]`.
+- The theme is set before the first paint by `THEME_SCRIPT` (`ThemeController.tsx`).
+
+## Type
+
+- **Plus Jakarta Sans** for text (the original face, owner's choice 2026-11-15).
+- **Saira Semi Condensed** for figures (`num`, `font-mono`), with tabular digits: narrow and
+  firm like a gym scoreboard, so "102.5" fits a set cell and reads at a glance between sets. It
+  replaces JetBrains Mono, a code font that made every number look like a terminal.
+- JetBrains Mono remains only in the story cards that print receipts.
+- Small labels (`field-label`) stay in the body face, sentence case, muted.
+- Page titles use the body face; Anton remains only in the Matchday story card.
+
+## Surfaces
+
+Cards, the GoPay way (owner, 2026-11-15, reversing the "fewer cards" step): each section sits on
+its own raised card (`rounded-card border bg-surface`, shaded as in "Raised" below) on the page
+background: Home's day hero, the week's numbers and recent workouts (one card, rows divided by
+hairlines), each routine and template, and each section of the phase page. Radius by role:
+`rounded-card` (16px) for cards and sheets, `rounded-ctl` for controls, pills only for chips. The
+plate outlines behind Home's hero and the intro stay gone.
+
+## Icons
+
+Solar by 480 Design (CC BY 4.0, credited in About), owner's choice 2026-11-15 over Lucide's thin
+default lines. Meaningful icons are Bold (solid; the owner found the two-tone version odd), which
+sits well in the raised tiles, mixed with Linear (outline). Small UI glyphs (arrows, chevrons, close, plus, minus, check,
+grips) are Linear so they stay light, and so is any icon drawn at 18 px or less, where the two
+solid shape would close up into a blot. The dock draws the current tab Bold and the others in Linear. The Workout tab is a clipboard (your
+routines), so it never reads as the dumbbell on the centre button (train now). Import from `@/components/icons` only; a new icon goes into `scripts/make-icons.mjs`, which
+writes `src/components/icons/solar.generated.tsx` from the `@iconify-json/solar` dev dependency
+(nothing is fetched at run time). Foods stay in Lucide, since Solar has almost none.
+
+## Empty states
+
+An empty state leads with `EmptyArt`: the subject's icon on a raised tile that floats with a
+slight tilt while a ring breathes out behind it (3.2 s loop, CSS only, still with reduced motion
+or Visual effects: Light), then one plain sentence and, where there is one, the next action.
+
+## Home header, notifications, the dock's centre
+
+- **Header** (owner, 2026-11-15): a dark/light switch on the left (sun and moon turning; it saves
+  Light or Dark, System stays in Settings), the ABOT mark centred, and a bell on the right with a
+  green count of what is new. Settings opens from the gear on Profile.
+- **Notifications** (`/notifications`, `src/lib/inbox.ts`): worked out on the phone, nothing sent.
+  Today's planned session and a missed one, new records and the weekly streak, the admin's
+  announcement, and backup or sync trouble. New ones lead with a dot; opening the page marks
+  them seen on this device.
+- **Dock centre** (`TodayButton`): a raised green disc with a glassy sheen and a Play mark, set
+  in a notch between the two pairs of tabs. A tap opens today's workout in a sheet (muscle map,
+  lifts, Start). When today's workout is finished, a tick lands once, then Play returns for the
+  next one.
+
+## Home's wallet stack
+
+The week's numbers and the day's card stack like a wallet (owner, 2026-11-15, after GoPay): the
+numbers on a Volt card behind (`wallet-card`: dark figures, rings and icons on the accent, flat
+icon tiles), the day's card laid 36px over its lower edge so the back card's corners stay hidden,
+casting a deep shadow up onto it. On the first visit of a session, once the splash has gone, the
+cards are dealt: the back one settles, then the front one slides up over it.
+
+## Glass buttons
+
+Buttons that stand on their own (back, settings, options, close) are round liquid glass in the
+page's theme (`glass-icon`): translucent, a highlight along the top, a shade inside the bottom
+edge, a soft shadow, sinking 1px when pressed. Over a photo or video they use `glass-btn`, the
+same build always dark. Small buttons inside a row (favourite stars in a list, set numbers,
+"last time" values) and text links stay flat so a busy screen stays calm.
+
+## Search
+
+Every search field is a soft grey pill (`search-pill`) set slightly into the page, with no
+outline until focused, as in GoPay.
+
+## Settings
+
+A short list of groups (Account, Preferences, Support, Follow ABOT); each row opens its section
+at `/settings?section=…`: General (language, theme, units, week start), Workout, Notifications,
+Data & backup, FAQ, About. Contact is a mail link with the app version in the subject. Social
+rows read "Soon" until `src/lib/social.ts` has their links. Sign out sits at the bottom, behind a
+confirm, and keeps every workout on the phone.
+
+## Plate calculator
+
+"Plates" on a barbell (or Smith machine) exercise card opens it, starting from the next set
+waiting to be done. `src/lib/plate-calculator.ts` loads each sleeve greedily from the heaviest
+plate, in integer grams, and reports what the plates cannot make. Bars: 20 / 15 / 10 / 0 kg
+(45 / 35 / 25 / 0 lb). Plates take IWF-inspired colours (25 Crimson `#ef4444`, 20 Cyber Blue
+`#3b82f6`, 15 Amber `#eab308`, 10 Green `#22c55e`, 5 Titanium `#e4e4e7`, 2.5 Carbon `#18181b`
+with a Volt edge, 1.25 Chrome `#71717a`). The sleeve drawing stays dark in both themes, like a
+product shot. With a gym on the workout, the bar and plates are that gym's and changes save to
+it; otherwise they are remembered on the device. Figures are tabular (`num`).
+
+## Sound and vibration
+
+Hardware feel, synthesised with Web Audio (`src/lib/sound-effects.ts`, no audio files) and
+paired with graduated vibration (`src/lib/haptics.ts`; Capacitor Haptics in the app):
+
+| Moment | Sound | Vibration |
+| --- | --- | --- |
+| Stepper, filter chip, Story layout, view toggle | tick: 12 ms triangle, 1400 to 300 Hz | 8 ms |
+| Set ticked off | latch: 600 Hz then 900 Hz, 90 ms | 15, 30, 25 ms |
+| New record on a lift logged before | A major arpeggio 440, 554, 659, 880 Hz | 30, 40, 60, 40, 100 ms |
+| Rest timer at zero (Rest alert) | three 1000 Hz pulses | 200, 100, 200 ms |
+| Rest at 3, 2, 1 seconds left (Rest alert) | 50 ms 800 Hz triangle pip | none |
+| Workout started | 220 to 440 Hz glide, then an 880 Hz click | 15, 40, 15 ms |
+| Finish summary opens | C major rolled upward, 523 to 1047 Hz (1319 Hz on top for a record) | 30 ms (30, 60, 30, 60, 60 with a record) |
+
+Settings > Workout > Sounds & vibration switches the tap sounds off (on by default); the rest
+countdown and alarm follow Rest alert. A first-ever lift is a baseline, so it plays no record
+chord. The first touch unlocks Web Audio so the timer-driven rest beep can play. In the Android
+app the page beeps while ABOT is on screen and the system notification rings while it is not
+(`LiveWorkoutReceiver` checks `MainActivity.inForeground`), so a rest ends with one alarm, not two.
+
+## Supersets and giant sets
+
+- Cards in one group share a coloured left edge, and the edge runs through the gap between
+  neighbouring cards, so the group reads as one bracket. Each group keeps its own colour
+  (orange, blue, pink, green) rather than Volt: Volt already means "live", and two supersets
+  in one workout must stay apart.
+- Badge: `Superset // A1`, `A2`; three or more exercises is `Giant set // A1` to `A3`. The
+  number is the card's place in the list, so reordering renumbers it.
+- Ticking a set hands off to the next exercise of the group that has a set left: no rest, the
+  island shows `Up next A2 · No rest` with the name and set, and the screen scrolls to that
+  card. Rest starts after the last exercise with work left.
+- On white the group colours are darkened (`.ss-text`) to stay above 4.5:1.
+
+## Recovery map
+
+- Fatigue model (`src/lib/muscle-recovery.ts`): each working set adds 15% to primary muscles and
+  7.5% to secondary ones, scaled by RPE (8 = 1x, 10 = 1.25x, 6 = 0.75x), capped at 100%. It
+  falls in a straight line: big muscles (chest, back, lats, quads, hamstrings, glutes, lower
+  back) clear in 72 hours, about 1.4% an hour; the rest in 48. Worked out from history on every
+  render, so imported or edited workouts count at once.
+- Four stages on Carbon (the map is always dark, like the island): Fresh 0-20% `#27272a` with a
+  thin light edge, Recovering 21-50% Volt at 50%, High load 51-80% Amber `#f59e0b`, Exhausted
+  81-100% Crimson `#ef4444`. Head, hands and joints sit darker than any muscle so the colours read.
+- Home tile: both sides small, "n/17 ready". Tap opens a sheet with one side at a time
+  (Anterior / Front, Posterior / Back) and a telemetry line per muscle: recovery %, last
+  trained and sets in that session, hours to ready (20% or less). Muscles are keyboard focusable.
+
+## Where the accent lands
+
+Volt is "live or primary". Per screen: the single primary action, the done state of a set, the
+running rest timer, and the current tab icon. Gold appears only where a record was set.
+
+## Labels
+
+Column and stat labels use `field-label`: Barlow 12px semibold, sentence case, muted. The old
+`label-caps` (10px code-font capitals with wide tracking) is gone, as are ad-hoc `uppercase`
+and wide `tracking-*` classes outside the story cards and admin.
+
+## Layout
+
+Phone first at 360px, one column. The set table is a fixed grid
+(`44px minmax(0,1fr) 60px 44px [40px] 44px`): the weight column is the narrowest that fits `102.5`
+in 18px mono; Prev takes what is left. Every tap target is 44px. At 640px and up the column caps at
+640px and centres.
+
+## Home (command centre)
+
+Owner briefs 2026-11-08: a dense command centre; then less text; then "more visual, with
+animation". So Home tells the week in pictures, each with one job:
+
+- **Week strip**: day letters over cells; trained days are Volt tiles with a check that pop in one
+  after another, today has a white ring that breathes slowly, other days a dim zinc-800 dot.
+- **Next up**: the routine name, its lifts as a row of exercise photos, Start (Volt, with a play
+  icon) and a square + for an empty workout. A thin plate outline turns slowly behind it (60 s per
+  turn). With no routine: Free session, Start an empty workout and + to create one.
+- **Volume**: the week's figure counts up from zero, the change against last week at the same
+  point (trend arrow), and a bar per day of the week that grows into place, today in full Volt.
+- **Days ring**: sessions this week as a ring that draws itself, against the schedule when one is
+  set, else out of 7 days.
+- **Body map**: front and back, muscles worked in the last 48 hours lit (resting), with "4/6 ready".
+- **Recent workouts**: name, Gold PR pill (only when a lift beat an earlier record), a relative day
+  (Today, Yesterday, Wed), the lifts as small photos, and duration, volume and sets as icons with
+  mono figures. Cards slide in in order and give to 98% under the thumb.
+
+Entrance animations start from an effect (pages mount inside AnimatePresence with
+initial={false}); every animated element starts from an inline style. Reduced motion shows the
+final state.
+
+## Navigation and Profile
+
+Owner brief 2026-11-08: Workout and Routines become one tab; Progress moves into Profile, laid
+out like a social profile.
+
+- **Dock**: four tabs, Home, Workout, Exercises, Profile. Profile's icon is the lifter's own plate
+  (photo or initials), dimmed until it is the current tab like the other icons. `/routines` and
+  `/progress` still work: the first shows the same library, the second forwards to Profile.
+- **Workout tab**: the logger while a workout runs. Otherwise "Start an empty workout" (the one
+  Volt action) above the routine library, where each routine has a quiet Start and its edit,
+  duplicate and delete controls.
+- **Profile**: a cover, the plate overlapping its lower edge with a page-coloured ring, Edit
+  profile beside it, then the name, one mono line (workouts, streak) and the backup chip. The
+  cover is the last twelve weeks of volume drawn as a skyline in dim Volt with the current week
+  brighter: the lifter's own data instead of a stock banner, plain Carbon until there is any.
+  Below, a sticky tab bar (Progress, Lifts; the open tab is kept in `?tab=`) with a Volt
+  underline on the current one. Progress is the summary with its detail pages, Lifts the e1RM
+  ranking. Edit profile (`/profile/edit`, owner brief 2026-11-10) holds what the lifter types in
+  about themselves: photo, name, username, height, the bodyweight log, and the account. The
+  backup chip opens it at the account. The old `?tab=about` address forwards there.
+
+## Workout bar, info tips and status outside the app
+
+Owner brief 2026-11-08:
+- **Workout bar above the dock.** The camera capsule (elapsed time; the rest countdown with
+  -15 s, +15 s and skip) moved from under the status bar to just above the dock, where the thumb
+  already is between sets. Pages add its height to their bottom padding (`--live-bar`), so it
+  never covers the last row.
+- **What the bar says between sets** (owner brief 2026-11-10: "ngga cuman menampilkan timer tapi
+  juga exercise, set, rep"). The running bar is as tall as the rest bar (56 px), so switching
+  between them is one shape changing content, not height. Left: the set the lifter is on ("Set 2
+  of 4 · 60 kg × 8", the first set not ticked off) over the exercise name. While that set is still
+  empty it shows the set before it as the number to beat ("last 60 kg × 8"). Right: the clock
+  with the live dot, and sets done ("7/16 sets"). The share of sets done runs as a Volt hairline
+  along the bottom edge, the same mark the rest countdown uses.
+- **No wave** (owner, 2026-11-15): the swells that used to run along the bar's bottom edge are
+  gone; the bar is calm glass, and the Volt hairline of sets done is the only moving mark.
+- **Shortcuts in the bar** (owner brief 2026-11-10). A tap opens the bar upward, the same shape
+  growing (Dynamic Island), into four 56 px targets: Pause or Resume, Done set (Volt, the one
+  primary; it ticks the set with the numbers the bar shows, so what you read is what is saved),
+  Add set, and Go to it on the workout page or Open elsewhere. Tap again, tap outside, Escape
+  or another page folds it. Ticking hands over to the rest countdown as usual.
+- **Info tips in Settings.** Each setting is a short title with an (i) beside it; the sentence
+  that explains it opens under the title on tap, instead of every explanation always showing.
+- **Status outside the app.** The owner asked for a Dynamic Island while ABOT is in the
+  background. iOS Live Activities (Dynamic Island) and Android live updates are only open to
+  native apps, so the web app posts one status notification instead when it is hidden during a
+  workout: "<workout> · rest until 14:32" with the next set below, cleared on return. Times are
+  absolute because background pages cannot tick. Opt-in under Settings, Status outside the app.
+
+## Back keeps your place
+
+Owner brief 2026-11-10: open a page, come back, and the list is where you left it. ABOT keeps
+each page's scroll offset itself (`ScrollMemory`): the browser's own restoration loses it,
+because the outgoing page fades out first and the incoming one starts short while it loads.
+On Back (the browser's, Android's, or a "‹ Parent" link) the offset is put back once the page
+is tall enough, and held a moment while photos settle; a touch or scroll stops it at once. The
+"‹ Parent" links (`BackLink`) go back in history when the parent is the page the lifter came
+from, so the parent returns with its scroll, tab and filters; opened any other way they are
+plain links. A new page always opens at the top.
+
+## App updates (Android)
+
+Owner brief 2026-11-10: update inside the app, download in the background, a pop-up with the
+changelog. Every start, and on return from the background at most every 30 minutes, the app asks
+GitHub Releases for a newer build. If there is one, a sheet titled New version shows the version, how many builds the phone
+is behind, and every skipped build's notes as a changelog (newest first, up to five), with Later
+(that version waits a day) and Update now (Volt). The sheet waits while a workout runs and on the
+workout, sign-in and intro pages. Android's DownloadManager fetches the APK, so it carries on with
+ABOT in the background and shows its own progress notification; Settings > About shows the
+percentage. When it is in, a banner at the top offers Install, which opens Android's installer
+(or the "Install unknown apps" switch the first time). A failed or stalled download offers the
+browser instead.
+
+## Dock scope and the workout detail
+
+Owner brief 2026-11-08:
+- **The dock is for the four top-level screens only** (Home, Workout, Exercises, Profile, and their
+  old addresses /routines and /progress). Detail screens (a past workout, the summary, an exercise,
+  the routine editor, settings, sign-in, the intro) get the whole screen and their own way back.
+  Its height is one CSS value (`--dock-h`) that page padding, the workout bar and notices read.
+- **Workout detail** (`/history/[id]`): the workout's own exercise photos blurred into a drifting
+  backdrop behind the crisp photos, the date and the name; a floating back pill and an options
+  menu (delete lives there, off the thumb's path). Four icon tiles count up (duration, volume,
+  sets, records), a body map lights the muscles worked, and each exercise card shows its photo,
+  gear, share of the workout's volume as a bar, and its sets with a bar for load against the
+  heaviest set: records in Gold, the best set by e1RM marked; tap to fold. A bottom action bar
+  holds Repeat (starts the same lifts with the same numbers) and Share story. Records count once
+  per lift and only when they beat an earlier one, the same rule as the PR pill on Home.
+
+## Workout summary (after Finish)
+
+Owner brief 2026-11-08: a moment of completion, then the numbers, with motion.
+- **Completion mark**: the plate outline is traced shut, fills faintly, a check is drawn, and
+  twelve small plates burst outward, Gold when a record fell, Volt otherwise (about 1.4 s). One
+  short buzz on phones that vibrate, only if rest alerts are on and the page was reached by a tap.
+- Four icon tiles count up (duration, volume, sets, exercises).
+- **Volume vs last time**: the previous session of the same routine (or name) as two bars and a
+  change pill (Volt when up).
+- **Records** pop in as Gold cards, one per lift, one chip per record-setting set with the kinds
+  it broke (WEIGHT, E1RM, VOLUME). **New lifts** (first time logged) are listed as the baseline,
+  not as records: there was nothing to beat. Same rule as Home and the workout detail.
+- A body map of the muscles worked; a bottom bar with Share to IG Story, See every set, Home.
+- **Streak screen** (owner brief 2026-11-10, "api streak yang berkobar"): when the workout grew
+  the week streak (the first workout of a week that continues it, or the first ever), the
+  summary opens on a full-screen dark moment first. A spark rises and catches at 0.35 s with a
+  flash and a ring; a flame drawn for ABOT (Volt body, yellow heart, near-white core, each layer
+  flickering on its own clock, embers drifting up) keeps burning. The count rolls from the old
+  number to the new at 0.85 s; five week plates follow, this week's lighting at 1.15 s. Volt
+  carries it because the streak flame is already Volt on Home. Its own sound
+  (`playStreakFire`: ember glide, ignition thump, crackles, G major) and a buzz on ignition. One
+  action, Continue, then the summary plays its own moment and chord, so the two never overlap.
+  It plays once per workout and not for a summary opened later. Reduced motion or Lite effects
+  show the finished screen still.
+
+## Streak sharing
+
+Owner brief 2026-11-10: tap the streak to play its flame again, and share it in twelve themes.
+The week streak on Home is a button that replays the streak screen (titled Your week streak,
+the count rolling up from one less). The streak screen has Share beside Continue, which opens a
+studio like Story Studio's: a 9:16 preview, twelve theme thumbnails, Share and Download. The
+themes are looks, not recolours (`src/lib/streak-card.ts`): Volt Flame, Inferno, Paper, Poster
+(Volt edge to edge, the count as wide as it fits), Neon Grid, Blue Flame, Steel, Gold (a framed
+black-and-gold card), Heatmap (the twelve weeks as tiles), Badge (an emblem with words around
+the ring), Sunset and Terminal (the streak as a command and its output). Each card carries the
+count, the last twelve weeks, the workouts since the streak began, @username and the ABOT mark.
+All twelve themes are free (owner, 2026-11-10).
+
+## Story Studio
+
+- Eleven layouts drawn straight to a 1080 x 1920 canvas (`src/lib/story-exporter.ts`).
+- **@username**: set once (Profile > About, or the field in the studio; both save to
+  `profileHandle`). Every layout prints it in its own free space and text colour (`HANDLE_SPOTS`);
+  the receipt prints it as a MEMBER line. Empty means the story goes out without it.
+
+## Exercise detail
+
+Owner brief 2026-11-08: revamp it with pictures, icons and motion.
+- **Hero**: the exercise's two real photos (start and end position, free-exercise-db) across the
+  full width, crossfading every 0.9 s like a GIF, with Start/End dots and a pause button; the
+  back pill floats over it. Owner's call: real photos read more clearly than the stick figure.
+  Offline it shows the photo bundled with the app; with no photo at all, the animated figure.
+  Then the name, and muscle and gear with their icons. How to's Motion tab also opens on Photos,
+  with Animation one tap away.
+- Four tiles count up: best e1RM (Gold) or most reps for bodyweight, heaviest, workouts, last done.
+- Summary keeps the body map and records; the e1RM line draws itself and carries a trend chip
+  (first to latest point, Volt when up). History cards show a relative day and a load bar per set.
+- A bottom bar: Start a workout with this, or, with a workout running, Add to workout (then
+  "In your workout") beside a button back to it.
+- Detail pages with a bottom bar report its height (`--action-bar`), so the workout capsule sits
+  above the bar instead of over its buttons.
+
+## Identity motif
+
+The set row as a hardware switch: a dark panel that, when you tap the square check, lights Volt,
+draws the tick, and passes one band of light across the row. The workout reads as a column of
+switches being thrown.
+
+## Radius, shadow, glow, glass
+
+- Radius: 16px cards and the dock, 12px buttons and set rows, 10px inputs, 8px set chips, full
+  round only for the camera capsule. The steps mark hierarchy.
+- Glow: two elements only. The Finish button (the one action that ends the session) and the
+  camera capsule's edge (it sits over content and must read as an object).
+- Glass: the two floating layers only, the bottom dock and the workout bar just above it (owner's
+  choice, 2026-11-10). Both sit over scrolling content, so glass says "this floats"; cards, set
+  rows, buttons, sheets and headers stay solid matte so figures read at a glance. The workout bar
+  keeps a dark glass in both themes and its Volt edge glow.
+- Liquid glass (owner, 2026-11-15: "seliquid di iOS"): where the browser draws SVG backdrop
+  filters (Chromium, so the Android app and Chrome), the dock, its lens and the Exercises
+  filter button bend the page at their rim like a lens (`src/lib/liquid-glass.ts`,
+  `useLiquidGlass`), with a light blur and tint so labels stay readable and a specular edge
+  brighter at the top left. The lens is clearer and bends harder, so it magnifies the tab under
+  it. The workout bar has it too, with its backdrop darkened rather than tinted so its figures
+  stay high-contrast. Safari and Firefox keep the frosted glass; Visual effects: Light makes all
+  of it solid.
+- Raised, the GoPay way (owner, 2026-11-15): every button, chip, card and icon tile has a face
+  that shades from light at the top to a touch darker at the bottom (`--neo-face`,
+  `--neo-card-face`), a grey shade inside its bottom edge in place of a solid side, a fine top
+  highlight and a soft shadow fading out under it (`--raise-btn`, `--raise-chip`, `--raise-card`,
+  `--raise-accent`). The faces are translucent overlays, so tinted cards keep their tint. A pressed
+  button sinks 1px with an inner shadow (`--raise-pressed`); a selected chip (aria-pressed,
+  aria-checked, or a label around a checked radio) stays pressed in; search fields and number
+  fields sit sunken (`--sink`). Controls built outside Button use `raised`, `raised-danger`,
+  `raised-card`, `chip`; icon tiles and stat boxes use `tile`; search fields use `sunk`. Left flat
+  on purpose: exercise photos, the dashed "Add set", glass surfaces, buttons over photos, the week
+  rail's selected day, bottom sheets, and segmented controls with a sliding marker.
+- Shadow: the dock only, as the elevation of the one floating layer.
+
+## Motion
+
+Purpose for each: the check press springs and the tick draws, so you feel the set land; the light
+sweep confirms which row changed; the camera capsule morphs between running time and rest
+countdown with one shared layout, so you see it is the same object changing state; the rest bar
+along the capsule's bottom edge shrinks with time, which is the information. Springs settle in
+about 200ms. Everything respects `prefers-reduced-motion` through one `MotionConfig`: movement and
+scale drop out, fades stay.
+
+Added at the owner's request (2026-11-08), each with its job:
+
+- **Splash** (`components/animations/SplashScreen.tsx`, `components/brand/AnimatedAbotMark.tsx`):
+  the plate assembles the way a plate goes onto a bar. Its outline is traced in Volt (0.45s), it
+  fills while turning one flat (60 degrees, spring 140/16), the centre hole is punched (a mask
+  circle growing to 22), the inner ring is scored, and one band of light passes across it, the
+  same sweep as a ticked set. "ABOT" rises letter by letter from a slot, the plate glows once as
+  if switched on, and the loading hairline fills. About 1.15s minimum while saved data is read;
+  it leaves by scaling up 4% as it fades. With reduced motion the mark is simply drawn. Cost:
+  every full load waits at least 1.15s; tab switches inside the app do not show it.
+- **Page transitions** (`components/animations/PageTransition.tsx`): the old page settles to 98%
+  and fades in 0.12s, then the new one comes forward in 0.2s. Opacity and transform only, so the
+  compositor does the work. It keeps the outgoing page on screen through Next's internal router
+  context; if a Next upgrade moves that module, drop the exit and keep the enter.
+- **Intro** (`app/onboarding`, `components/onboarding/Illustrations.tsx`): three slides, each with
+  an original illustration built from ABOT's own parts and acting out its sentence on a 3.6s loop:
+  a fingertip taps a set's check, the row lights, the band of light passes and a Gold PR pops; a
+  phone with the rest capsule counting down above the dock, the thumb's reach traced as a dashed
+  Volt arc; a barbell sleeve inside a phone loaded plate by plate (side view) and clamped, with the
+  signal gone. The illustration travels further than the text between slides (90 vs 64 px), so
+  the slide has depth, and a large faint plate behind everything turns one flat per step. Swipe or
+  Next. Reduced motion shows each scene's end state. Shown once per device, never to anyone with data.
+- **Sign-in** (`app/login`): content rises from the bottom with the same spring. One Volt action
+  per state: Sign in with Google when this build has cloud sync, Continue without an account when
+  it does not (the Google button then disabled with a plain note), Done once signed in. A back
+  link returns to the page that opened it (`?from=`), since the dock is hidden here. After Google,
+  the lifter lands back on that page with a short notice above the dock.
+- **Press springs**: every button gives to 96% under the thumb; primary actions (Start, Finish,
+  the set check) also lift to 102% on hover.
+
+## Logo
+
+Owner brief 2026-11-10: rounder, with more character, more masculine; the hexagon plate read as
+a bolt nut. The mark is now a heavy, flat-topped A with wide legs and an open counter, a barbell
+passing behind it (only the piece inside the counter shows) and a plate on each side, cut back
+along the legs; every corner rounded. It is filled shapes only, one path
+(`src/components/brand/mark-path.ts`), so the SVG mark, the story canvas, the favicon and the
+Android icons all draw the same thing; `node scripts/make-app-icons.mjs` regenerates the favicon,
+the status-bar icon and the launcher PNGs from it. Volt on Obsidian. The splash loads it like a
+bar: the A punches up, the bar shows through it, the plates slide on and lock, one band of
+light passes. The hexagon plate stays as a UI motif (week plates, the Profile tab), not the logo.
+
+## Icons
+
+Lucide (owner's brief), only where a glyph carries meaning next to a label or in a known spot: the
+tabs (always with text), the check, timer controls, the card menu and info. No decorative icons.
+
+## States
+
+Every list has an empty state that says why it is empty and the one action that fills it. Data
+lives on the device, so error states are reserved for storage failures and shown inline.

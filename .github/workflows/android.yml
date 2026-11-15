@@ -1,0 +1,196 @@
+name: Android APK
+
+# Security model (audit 2026-11-11):
+# - The build job runs npm and Gradle with a read-only token and no secrets. It makes an unsigned
+#   release APK (not debuggable) and a debug APK for the emulator smoke test.
+# - Only the release job holds the signing key and write access. It runs no npm code: it signs
+#   the build job's APK and publishes it. It starts on every push to main (and on Run workflow),
+#   in the "release" environment, and waits there until the owner approves (Review deployments).
+#   The environment MUST list the owner as a required reviewer: without one, every push to main
+#   would reach users' phones unchecked.
+# Actions are pinned to full commit SHAs (the tag each one was in the comment).
+on:
+  push:
+    branches: [main, "feature/**", "fix/**"]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - run: npm ci
+
+      - name: Check the cloud sync settings
+        if: ${{ vars.NEXT_PUBLIC_SUPABASE_URL == '' || vars.NEXT_PUBLIC_SUPABASE_ANON_KEY == '' }}
+        run: echo "::warning::NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is not set in the repository's Actions variables. This APK runs local-only (no Google sign-in)."
+
+      - name: Export the web app and copy it into the Android project
+        run: npm run build:android
+        # Cloud sync: the project URL and anon key (public by design), from the repository's
+        # Actions variables. Without them the APK runs local-only. See docs/cloud-sync-setup.md.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_ABOT_ADMIN_PIN: ${{ vars.NEXT_PUBLIC_ABOT_ADMIN_PIN }}
+
+      - name: Build the release APK (unsigned) and the debug APK for the smoke test
+        working-directory: android
+        run: ./gradlew assembleRelease assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: abot-release-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: abot-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  # Signs the build job's APK with the private release key and publishes it as release abot-<n>.
+  # versionCode is the run number (android/app/build.gradle), so each release installs over the
+  # last. Needs four secrets (scripts/make-release-keystore.sh prints them): ABOT_KEYSTORE_B64,
+  # ABOT_KEYSTORE_PASSWORD, ABOT_KEY_ALIAS, ABOT_KEY_PASSWORD.
+  release:
+    needs: apk
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    # One release waits for approval at a time: a newer push cancels the one still waiting, so
+    # approving always ships the latest main. (With cancel-in-progress false, a release left
+    # waiting held the group and every later release queued behind it.)
+    concurrency:
+      group: release
+      cancel-in-progress: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: abot-release-unsigned
+          path: unsigned
+
+      - name: Sign the APK with the release key
+        env:
+          KEYSTORE_B64: ${{ secrets.ABOT_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ABOT_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ABOT_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ABOT_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::The release signing secrets are missing. Run scripts/make-release-keystore.sh and add the four secrets to the release environment."
+            exit 1
+          fi
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          KS="$RUNNER_TEMP/release.jks"
+          # A pasted secret often carries line breaks or spaces; base64 has none of its own.
+          if ! printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n\t' | base64 -d > "$KS" 2>/dev/null || [ ! -s "$KS" ]; then
+            echo "::error::ABOT_KEYSTORE_B64 is not valid base64. Copy the whole file again (pbcopy < ~/abot-release/abot-release.jks.b64) and paste it as the secret's value."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::The keystore opened, but ABOT_KEYSTORE_PASSWORD or ABOT_KEY_ALIAS does not match it (the alias is abot)."
+            exit 1
+          fi
+          "$BT/zipalign" -p -f 4 unsigned/app-release-unsigned.apk aligned.apk
+          "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --out "abot-1.0.$GITHUB_RUN_NUMBER.apk" aligned.apk
+          rm -f "$KS"
+          "$BT/apksigner" verify --print-certs "abot-1.0.$GITHUB_RUN_NUMBER.apk" | grep -E "SHA-256|DN"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          N="$GITHUB_RUN_NUMBER"
+          NOTES=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.commit.message' | head -n 1)
+          # abot.apk is the same file under a fixed name, so the web app's "Get the app" link
+          # (releases/latest/download/abot.apk) always points at the newest build.
+          cp "abot-1.0.$N.apk" abot.apk
+          gh release create "abot-$N" "abot-1.0.$N.apk" abot.apk --repo "$GITHUB_REPOSITORY" \
+            --title "ABOT 1.0.$N" --notes "$NOTES" --target "$GITHUB_SHA" --latest
+          # Keep the ten newest abot- releases, and no apk- release at all: the apk- channel was
+          # signed with the old debug key, which is public in this repository's history, so it is
+          # retired (security audit 2026-11-13). Phones on it uninstall and install abot-.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
+            | grep '^abot-' | sort -t- -k2 -n -r | tail -n +11 \
+            | xargs -r -I{} gh release delete {} --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
+            | grep '^apk-' \
+            | xargs -r -I{} gh release delete {} --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+
+  # The APK on a real Android 14 emulator: intro and permissions screens, Android's permission
+  # dialogs, the Settings hand-off and the workout notification (scripts/android-smoke.mjs).
+  # Skipped on main, where the same commit already passed it on its branch.
+  smoke:
+    needs: apk
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: abot-debug-apk
+          path: apk
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run the smoke checks on an Android 14 emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: node scripts/android-smoke.mjs apk/app-debug.apk smoke-out
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: android-smoke-screens
+          path: smoke-out
+          if-no-files-found: ignore

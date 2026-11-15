@@ -1,0 +1,454 @@
+"use client";
+
+import { setText } from "@/lib/set-metrics";
+import { asRoutine } from "@/lib/comeback";
+import { setNumbers } from "@/lib/sets";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { BackLink } from "@/components/navigation/BackLink";
+import { useSearchParams, useRouter } from "next/navigation";
+import { AnimatePresence, motion, useReducedMotionConfig } from "framer-motion";
+import { ChevronDown, ChevronLeft, Dumbbell, Layers, MoreHorizontal, Pencil, Play, Timer, Trash2, Trophy } from "@/components/icons";
+import { RenameWorkoutSheet, SaveAsRoutineButton } from "@/components/workout/SessionActions";
+import { useWorkoutStore } from "@/store/useWorkoutStore";
+import { useSettingsStore } from "@/store/useSettingsStore";
+import { useAllExercises } from "@/store/useExerciseStore";
+import { HydrationGate } from "@/components/ui/Loading";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Button, PRESS_SPRING } from "@/components/ui/Button";
+import { Sheet } from "@/components/ui/Sheet";
+import { SetTypeChip } from "@/components/workout/SetTypeChip";
+import { ShareStoryButton } from "@/components/share/ShareStoryButton";
+import { GymTag } from "@/components/workout/GymTag";
+import { WorkoutPhotos, useWorkoutPhotos } from "@/components/workout/WorkoutPhotos";
+import { ExerciseThumb, exercisePhoto } from "@/components/exercise/ExerciseThumb";
+import { EquipmentIcon } from "@/components/icons/EquipmentIcon";
+import { MuscleMap } from "@/components/anatomy/MuscleMap";
+import { useActionBarSpace } from "@/components/layout/useActionBarSpace";
+import { CountFromZero, Rise, useEntrance } from "@/components/motion/Entrance";
+import { sessionRecords, workedMuscles } from "@/lib/session-insights";
+import { countSets, estimate1RM, formatDuration, isWorkingSet, sessionDurationSec, sessionVolume } from "@/lib/calc";
+import { formatVolume } from "@/lib/units";
+import {
+  EQUIPMENT_LABELS,
+  type Exercise,
+  type SessionExercise,
+  type WeightUnit,
+  type WorkoutSession,
+} from "@/types/workout";
+import { exercisePath } from "@/lib/routes";
+import { useT } from "@/i18n";
+import { variationLabel } from "@/data/variations";
+
+const SPRING = { type: "spring", stiffness: 300, damping: 26 } as const;
+
+export default function SessionPage() {
+  return (
+    <HydrationGate>
+      <SessionDetail />
+    </HydrationGate>
+  );
+}
+
+function SessionDetail() {
+  const t = useT();
+  const id = useSearchParams().get("id") ?? "";
+  const router = useRouter();
+  const sessions = useWorkoutStore((s) => s.sessions);
+  const active = useWorkoutStore((s) => s.active);
+  const deleteSession = useWorkoutStore((s) => s.deleteSession);
+  const startFromRoutine = useWorkoutStore((s) => s.startFromRoutine);
+  const { weightUnit } = useSettingsStore();
+  const { byId } = useAllExercises();
+  const [menu, setMenu] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  useActionBarSpace(76);
+
+  const session = sessions.find((s) => s.id === id);
+  // A record counts once per lift, and only when it beat an earlier one: a first attempt beats
+  // nothing (the same rule as the PR pill on Home).
+  const prs = useMemo(() => (session ? sessionRecords(session, sessions, byId).records : []), [session, sessions, byId]);
+  const prSetIds = useMemo(() => new Set(prs.map((p) => p.setId)), [prs]);
+  const prLifts = new Set(prs.map((p) => p.exerciseId)).size;
+  const photos = useWorkoutPhotos(session?.id);
+
+  if (!session) {
+    return (
+      <main>
+        <PageHeader title={t("Workout not found")} back={{ href: "/", label: t("Home") }} />
+        <p className="px-4 pt-4 text-sm text-text-muted">{t("This workout is not on this device. It may have been deleted.")}</p>
+      </main>
+    );
+  }
+
+  const total = sessionVolume(session, byId);
+  const sets = countSets(session).completed;
+  const muscles = workedMuscles(session, byId);
+
+  return (
+    <main className="flex flex-1 flex-col">
+      <Hero session={session} byId={byId} muscles={muscles} cover={photos.photos[0]?.url} onMenu={() => setMenu(true)} />
+
+      <div className="flex flex-col gap-3 px-4 pt-4">
+        {/* The four figures in one strip, so the photos and the lifts start higher. */}
+        <Rise order={1}>
+          <dl className="panel grid grid-cols-4 divide-x divide-line py-2">
+            <Stat icon={<Timer size={16} />} label={t("Duration")} value={sessionDurationSec(session)} format={(n) => formatDuration(Math.round(n))} />
+            <Stat icon={<Dumbbell size={16} />} label={t("Volume")} value={total} format={(n) => formatVolume(n, weightUnit)} />
+            <Stat icon={<Layers size={16} />} label={t("Sets")} value={sets} format={(n) => String(Math.round(n))} />
+            <Stat icon={<Trophy size={16} />} label={t("Records")} value={prLifts} format={(n) => String(Math.round(n))} pr={prLifts > 0} />
+          </dl>
+        </Rise>
+
+        <Rise order={2}>
+          <WorkoutPhotos state={photos} sessionName={session.name} />
+        </Rise>
+
+
+        {session.exercises.map((ex, i) => (
+          <Rise key={ex.id} order={4 + Math.min(i, 6)}>
+            <ExerciseCard ex={ex} def={byId[ex.exerciseId]} total={total} unit={weightUnit} prSetIds={prSetIds} />
+          </Rise>
+        ))}
+
+      </div>
+
+      {/* Room for the action bar, so the last card can scroll clear of it. */}
+      <div className="h-24" aria-hidden="true" />
+
+      {/* Actions within thumb reach, over the content. */}
+      <div className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-[640px] border-t border-line bg-bg/85 px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">
+        <div className="grid grid-cols-2 gap-2">
+          {active ? (
+            <Link
+              href="/workout"
+              className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-accent/40 text-sm font-semibold"
+            >
+              <Play aria-hidden="true" size={16} className="text-accent" />
+              {t("Current workout")}
+            </Link>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={() => {
+                startFromRoutine(asRoutine(session));
+                router.push("/workout");
+              }}
+              className="min-h-12 text-base"
+            >
+              <Play aria-hidden="true" size={18} />
+              {t("Repeat")}
+            </Button>
+          )}
+          <ShareStoryButton session={session} photos={photos.photos} label={t("Share story")} className="min-h-12 w-full" />
+        </div>
+      </div>
+
+      <Sheet open={menu} onClose={() => setMenu(false)} title={session.name}>
+        <button
+          type="button"
+          onClick={() => {
+            setMenu(false);
+            setRenameOpen(true);
+          }}
+          className="flex h-12 w-full items-center gap-3 rounded-ctl px-3 text-left text-base font-semibold hover:bg-surface-2"
+        >
+          <Pencil aria-hidden="true" size={18} /> {t("Rename workout")}
+        </button>
+        <SaveAsRoutineButton session={session} className="mb-2 mt-1 w-full justify-start !min-h-12 !rounded-ctl !text-base" />
+        <button
+          type="button"
+          onClick={() => {
+            setMenu(false);
+            setConfirm(true);
+          }}
+          className="flex h-12 w-full items-center gap-3 rounded-ctl px-3 text-left text-base font-semibold text-failure hover:bg-failure/10"
+        >
+          <Trash2 aria-hidden="true" size={18} /> {t("Delete this workout")}
+        </button>
+      </Sheet>
+
+      <RenameWorkoutSheet session={session} open={renameOpen} onClose={() => setRenameOpen(false)} />
+
+      <Sheet
+        open={confirm}
+        onClose={() => setConfirm(false)}
+        title={t("Delete this workout?")}
+        footer={
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={() => setConfirm(false)}>{t("Keep it")}</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                deleteSession(session.id);
+                router.push("/");
+              }}
+            >
+              {t("Delete")}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-text-muted">
+          {t("Its sets leave your history and any records it set are recalculated. This cannot be undone.")}
+        </p>
+      </Sheet>
+    </main>
+  );
+}
+
+/**
+ * The top of the page: the lifter's first photo of the session, or else the workout's own exercise
+ * photos, blurred into a backdrop (used as colour and texture, not detail), the crisp exercise
+ * photos in a row on top, then the date, the name and the gym. The backdrop drifts slightly, like
+ * a slow camera.
+ */
+function Hero({
+  session,
+  byId,
+  muscles,
+  cover,
+  onMenu,
+}: {
+  session: WorkoutSession;
+  byId: Record<string, Exercise>;
+  muscles: ReturnType<typeof workedMuscles>;
+  cover?: string;
+  onMenu: () => void;
+}) {
+  const t = useT();
+  const reduce = useReducedMotionConfig();
+  const defs = session.exercises.map((e) => byId[e.exerciseId]).filter(Boolean) as Exercise[];
+  const photos = cover ? [cover] : (defs.map((d) => exercisePhoto(d)).filter(Boolean).slice(0, 4) as string[]);
+  const date = new Date(session.startedAt);
+  return (
+    <header className="relative overflow-hidden border-b border-line">
+      <motion.div
+        aria-hidden="true"
+        className="absolute inset-0 grid grid-cols-2"
+        // Blurred once as a still layer: a backdrop blur over a slowly zooming photo was
+        // recomputed on every frame while the page was open.
+        style={{ filter: "blur(24px)", scale: 1.15 }}
+        initial={reduce ? undefined : { scale: 1.22 }}
+        animate={{ scale: 1.15 }}
+        transition={{ duration: 1.2, ease: "easeOut" }}
+      >
+        {photos.map((src, i) => (
+          <div key={i} className={`bg-cover bg-center ${photos.length === 1 ? "col-span-2" : ""}`} style={{ backgroundImage: `url(${src})` }} />
+        ))}
+      </motion.div>
+      {/* A dark wash over the blurred photos so white text holds 4.5:1 over any photo. */}
+      <div aria-hidden="true" className="absolute inset-0 bg-bg/70" />
+      <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-bg to-transparent" />
+
+      <div className="relative flex flex-col gap-3 px-4 pb-3 pt-3">
+        <div className="flex items-center justify-between">
+          <BackLink
+            href="/"
+            className="glass-icon rounded-full inline-flex min-h-11 items-center gap-1 pl-1.5 pr-3 text-sm font-semibold"
+          >
+            <ChevronLeft aria-hidden="true" size={18} />
+            {t("Home")}
+          </BackLink>
+          <button
+            type="button"
+            onClick={onMenu}
+            aria-label={t("Workout options")}
+            aria-haspopup="dialog"
+            className="glass-icon rounded-full flex size-11 items-center justify-center"
+          >
+            <MoreHorizontal aria-hidden="true" size={20} />
+          </button>
+        </div>
+        {/* The day, the name and the gym on the left; on the right, the muscles it worked as a
+            small map, which replaced the photo strip and the separate muscles card. */}
+        <Rise order={0} className="flex items-end gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="num text-xs text-text-muted">
+              {date.toLocaleDateString(t.locale, { weekday: "long", day: "numeric", month: "long" })} ·{" "}
+              {date.toLocaleTimeString(t.locale, { hour: "2-digit", minute: "2-digit" })}
+            </p>
+            <h1 className="mt-0.5 text-2xl font-bold leading-tight tracking-tight">{session.name}</h1>
+            <GymTag session={session} />
+          </div>
+          {muscles.primary.length > 0 && (
+            <div className="w-28 shrink-0 [&_figcaption]:hidden">
+              <MuscleMap primary={muscles.primary} secondary={muscles.secondary} width={112} />
+            </div>
+          )}
+        </Rise>
+      </div>
+    </header>
+  );
+}
+
+function Stat({
+  icon,
+  label,
+  value,
+  format,
+  pr = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  format: (n: number) => string;
+  pr?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col items-center gap-0.5 px-1 text-center">
+      <dt className="flex items-center gap-1 text-[10px] font-semibold text-text-muted">
+        <span aria-hidden="true" className={`[&>svg]:size-3 ${pr ? "text-pr" : ""}`}>
+          {icon}
+        </span>
+        <span className="truncate">{label}</span>
+      </dt>
+      <dd className={`num w-full truncate text-sm font-bold tabular-nums min-[380px]:text-base ${pr ? "text-pr" : ""}`}>
+        <CountFromZero value={value} format={format} />
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * One exercise: photo, name and gear, its share of the workout's volume as a bar, and its sets.
+ * Each set has a bar for its load against the heaviest set of the exercise; records are gold and
+ * the best set by estimated 1RM is marked. Tap the header to fold the sets away.
+ */
+function ExerciseCard({
+  ex,
+  def,
+  total,
+  unit,
+  prSetIds,
+}: {
+  ex: SessionExercise;
+  def: Exercise | undefined;
+  total: number;
+  unit: WeightUnit;
+  prSetIds: Set<string>;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(true);
+  const controls = useEntrance();
+  const nums = setNumbers(ex.sets);
+  const volume = ex.sets.filter(isWorkingSet).reduce((n, s) => n + (s.weightKg ?? 0) * (s.reps ?? 0), 0);
+  const share = total > 0 ? Math.min(1, volume / total) : 0;
+  const maxKg = Math.max(...ex.sets.map((s) => s.weightKg ?? 0), 0);
+  const best = ex.sets
+    .filter((s) => isWorkingSet(s) && (s.weightKg ?? 0) > 0)
+    .reduce<{ id: string; e: number } | null>((b, s) => {
+      const e = estimate1RM(s.weightKg!, s.reps!);
+      return !b || e > b.e ? { id: s.id, e } : b;
+    }, null);
+  const panelId = `sets-${ex.id}`;
+
+  return (
+    <section aria-labelledby={`ex-${ex.id}`} className="panel overflow-hidden">
+      <div className="flex items-center gap-3 p-3">
+        {def ? <ExerciseThumb exercise={def} size={48} /> : <span className="size-12 rounded-xl bg-surface-2" aria-hidden="true" />}
+        <div className="min-w-0 flex-1">
+          <h2 id={`ex-${ex.id}`} className="truncate text-base font-semibold">
+            {def ? (
+              <Link href={exercisePath(def.id)} className="text-text underline-offset-4 hover:underline">
+                {def.name}
+              </Link>
+            ) : (
+              t("Removed exercise")
+            )}
+          </h2>
+          {def && (
+            <p className="flex items-center gap-1.5 text-xs text-text-muted">
+              <EquipmentIcon equipment={def.equipment} size={14} />
+              {t(EQUIPMENT_LABELS[def.equipment])}
+              {ex.variation && <> · {t(variationLabel(ex.variation))}</>} · <span className="num">{t.n(ex.sets.filter((s) => s.completed).length, "{n} set", "{n} sets")}</span>
+            </p>
+          )}
+          {share > 0 && (
+            <div className="mt-1.5 flex items-center gap-2" title={t("Share of this workout's volume")}>
+              <span className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-800">
+                <motion.span
+                  className="block h-full origin-left rounded-full bg-accent"
+                  style={{ scaleX: 0 }}
+                  animate={controls}
+                  variants={{ still: { scaleX: share }, show: { scaleX: share, transition: { duration: 0.8, delay: 0.4, ease: [0.22, 1, 0.36, 1] } } }}
+                />
+              </span>
+              <span className="num text-[10px] text-text-muted">
+                {Math.round(share * 100)}%<span className="sr-only"> {t("of the workout's volume")}</span>
+              </span>
+            </div>
+          )}
+        </div>
+        <motion.button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-controls={panelId}
+          aria-label={open ? t("Hide sets of {name}", { name: def?.name ?? t("exercise") }) : t("Show sets of {name}", { name: def?.name ?? t("exercise") })}
+          whileTap={{ scale: 0.9 }}
+          transition={PRESS_SPRING}
+          className="flex size-11 shrink-0 items-center justify-center rounded-full text-text-muted hover:bg-ink/[0.06] hover:text-text"
+        >
+          <motion.span animate={{ rotate: open ? 0 : -90 }} transition={SPRING}>
+            <ChevronDown aria-hidden="true" size={20} />
+          </motion.span>
+        </motion.button>
+      </div>
+      {ex.notes && <p className="-mt-1 px-3 pb-2 text-xs text-text-muted">{ex.notes}</p>}
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.ol
+            id={panelId}
+            key="sets"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            className="flex flex-col gap-1 overflow-hidden border-t border-line px-3 py-2"
+          >
+            {ex.sets.map((s, i) => {
+              const num = nums[i] ?? null;
+              const isPr = prSetIds.has(s.id);
+              const isBest = best?.id === s.id;
+              const fill = maxKg > 0 && s.weightKg ? s.weightKg / maxKg : 0;
+              return (
+                <li key={s.id} className={`flex min-h-10 items-center gap-3 rounded-lg px-1 text-sm ${s.completed ? "" : "opacity-45"}`}>
+                  <SetTypeChip type={s.type} number={num} />
+                  <span className="num w-28 shrink-0">
+                    {setText(s, def?.logType, unit, { isBodyweight: def?.isBodyweight, reps: (n) => t("{n} reps", { n: String(n) }) })}
+                  </span>
+                  <span aria-hidden="true" className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-zinc-800/80">
+                    <motion.span
+                      className={`block h-full origin-left rounded-full ${isPr ? "bg-pr" : "bg-accent/60"}`}
+                      style={{ scaleX: 0 }}
+                      animate={controls}
+                      variants={{
+                        still: { scaleX: fill },
+                        show: { scaleX: fill, transition: { duration: 0.6, delay: 0.5 + i * 0.05, ease: [0.22, 1, 0.36, 1] } },
+                      }}
+                    />
+                  </span>
+                  {s.rpe !== null && (
+                    <span className="shrink-0 text-xs text-text-muted">
+                      RPE <span className="num">{s.rpe}</span>
+                    </span>
+                  )}
+                  {isPr ? (
+                    <span className="flex shrink-0 items-center gap-1 text-xs font-bold text-pr">
+                      <Trophy aria-hidden="true" size={12} /> PR
+                    </span>
+                  ) : isBest ? (
+                    <span className="field-label shrink-0 !text-text">{t("Best")}</span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </motion.ol>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}

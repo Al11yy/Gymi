@@ -1,0 +1,195 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { Button } from "@/components/ui/Button";
+import { useRedeemStore } from "@/components/paywall/RedeemCodeModal";
+import { useEntitlements, updateEntitlement } from "@/store/useEntitlements";
+import { useSettingsStore } from "@/store/useSettingsStore";
+import { useSyncStore } from "@/store/useSyncStore";
+import { isCloudSyncConfigured } from "@/data/sync/supabase";
+import { DEFAULT_ENTITLEMENT, SIMULATOR } from "@/lib/entitlements";
+import { restoreEntitlementFromAccount, type RestoreResult } from "@/lib/entitlement-sync";
+import { PLAN_NAME, billingStatus, type PlanKind } from "@/lib/billing-status";
+import { useNow } from "@/lib/useNow";
+import { feedback } from "@/lib/feedback";
+import { useT } from "@/i18n";
+import { AbotMark } from "@/components/brand/AbotMark";
+import { CountUp } from "@/components/progress/CountUp";
+
+/** A week or less of PRO left: the card says so in words, not only in colour. */
+const ENDS_SOON_DAYS = 7;
+
+const BADGE: Record<PlanKind, string> = {
+  pro: "bg-accent text-black",
+  lifetime: "bg-accent text-black",
+  beta: "border border-accent/60 text-accent",
+  core: "border border-white/20 text-zinc-300",
+};
+
+/**
+ * Plan & billing in Settings: what this phone holds now (plan, end date, days left) and the three
+ * ways to change it. Reads useEntitlements(), so the simulator and a redeemed code show at once.
+ * There is no app store purchase to restore: "Restore from account" brings down a licence held on
+ * the signed-in ABOT account, and only shows in builds with cloud sync.
+ */
+export function BillingSection() {
+  const t = useT();
+  const e = useEntitlements();
+  // A minute is enough for a figure counted in days.
+  const now = useNow(60_000);
+  const s = billingStatus(e, e.proExpiresAt, now);
+  const date = (iso: string) => new Date(iso).toLocaleDateString(t.locale, { day: "2-digit", month: "short", year: "numeric" });
+  const simulator = e.devOverrideMode !== "AUTO" && e.devOverrideMode !== "FORCE_BETA" ? SIMULATOR.find((m) => m.mode === e.devOverrideMode) : undefined;
+
+  const badge = { pro: t("Active"), lifetime: t("Active"), beta: t("Beta access"), core: t("PRO locked") }[s.plan];
+  const primary = { core: t("Get ABOT Pro"), beta: t("Get ABOT Pro"), pro: t("Manage plan"), lifetime: t("View plan details") }[s.plan];
+  const note =
+    s.plan === "beta"
+      ? t("Every PRO feature is open while the founders beta runs.")
+      : s.plan === "core"
+        ? t("PRO features are locked on this phone.")
+        : s.plan === "pro" && s.daysLeft !== null && s.daysLeft <= ENDS_SOON_DAYS
+          ? t("PRO ends soon. Redeem a code or upgrade to keep it.")
+          : null;
+
+  const paid = s.plan === "pro" || s.plan === "lifetime";
+  // Days left as a bar over a year of PRO: the figure, made visible at a glance.
+  const left = s.plan === "pro" && s.daysLeft !== null ? Math.min(1, s.daysLeft / 365) : null;
+
+  return (
+    <section
+      aria-labelledby="billing-heading"
+      className={`force-dark relative overflow-hidden rounded-card border bg-[#121215] px-4 py-3 text-text ${paid ? "border-accent/45" : "border-white/10"}`}
+    >
+      {paid && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-16 -top-20 size-56 rounded-full"
+          style={{ background: "radial-gradient(circle, color-mix(in oklab, var(--color-accent) 16%, transparent), transparent 65%)" }}
+        />
+      )}
+      {/* Plan name and status on one row; the dates, a note and the actions under it. */}
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 id="billing-heading" className="field-label text-zinc-400">
+            {t("Plan & billing")}
+          </h2>
+          <p className="flex items-center gap-2 text-xl font-extrabold leading-tight tracking-tight text-white">
+            {paid && (
+              <span className="text-accent drop-shadow-[0_0_10px_color-mix(in_oklab,var(--color-accent)_45%,transparent)]">
+                <AbotMark size={20} />
+              </span>
+            )}
+            {PLAN_NAME[s.plan]}
+          </p>
+        </div>
+        <span className={`mt-0.5 shrink-0 rounded-[4px] px-2 py-0.5 font-mono text-[10px] font-bold tracking-[0.1em] ${BADGE[s.plan]}`}>{badge}</span>
+      </div>
+
+      {left !== null && (
+        <div aria-hidden="true" className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className={`h-full rounded-full ${s.daysLeft! <= ENDS_SOON_DAYS ? "bg-[#f59e0b]" : "bg-accent"}`} style={{ width: `${Math.max(2, left * 100)}%` }} />
+        </div>
+      )}
+      {s.plan === "pro" && (
+        <dl className="relative mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+          <div className="flex gap-1.5">
+            <dt className="text-zinc-400">{t("Expires")}</dt>
+            <dd className="font-mono font-semibold tabular-nums text-white">{s.expiresAt ? date(s.expiresAt) : t("No end date")}</dd>
+          </div>
+          {s.daysLeft !== null && (
+            <div className="flex gap-1.5">
+              <dt className="text-zinc-400">{t("Days left")}</dt>
+              <dd className={`font-mono font-semibold tabular-nums ${s.daysLeft <= ENDS_SOON_DAYS ? "text-[#f59e0b]" : "text-accent"}`}>
+                {/* Counts up when a code or a purchase adds days while the card is on screen. */}
+                <CountUp value={s.daysLeft} format={(n) => String(Math.round(n))} />
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {s.plan === "lifetime" && (
+        <dl className="mt-1.5 flex gap-1.5 text-xs">
+          <dt className="text-zinc-400">{t("Expires")}</dt>
+          <dd className="font-semibold text-white">{t("Does not expire")}</dd>
+        </dl>
+      )}
+      {note && <p className="mt-1.5 text-xs text-zinc-300">{note}</p>}
+      {simulator && <p className="mt-0.5 text-xs text-zinc-400">{t("Simulator on: {mode}", { mode: t(simulator.label) })}</p>}
+
+      <div className="relative mt-3 grid grid-cols-2 gap-2">
+        <Button variant="primary" className="px-2 leading-tight" onClick={() => e.openPaywall()}>
+          {primary}
+        </Button>
+        <Button className="px-2 leading-tight" onClick={() => useRedeemStore.getState().show()}>
+          {t("Redeem code")}
+        </Button>
+        {isCloudSyncConfigured() && <RestoreFromAccount />}
+      </div>
+    </section>
+  );
+}
+
+function useSignedIn(): boolean {
+  return useSyncStore((s) => s.userId !== null && (s.phase === "idle" || s.phase === "syncing" || s.phase === "offline" || s.phase === "error"));
+}
+
+/** Brings the signed-in account's licence to this phone; signed out, it leads to sign-in. */
+function RestoreFromAccount() {
+  const t = useT();
+  const signedIn = useSignedIn();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<RestoreResult["kind"] | null>(null);
+
+  if (!signedIn) {
+    return (
+      <Link
+        href="/login?from=/settings"
+        className="col-span-2 flex min-h-11 w-full items-center justify-center rounded-xl text-sm font-semibold text-zinc-300 transition-colors hover:bg-white/[0.05] hover:text-white active:bg-white/[0.08]"
+      >
+        {t("Sign in to restore from your account")}
+      </Link>
+    );
+  }
+
+  async function restore() {
+    setBusy(true);
+    setResult(null);
+    const r = await restoreEntitlementFromAccount(useSettingsStore.getState().entitlement ?? DEFAULT_ENTITLEMENT);
+    if (r.kind === "restored" || r.kind === "revoked") {
+      updateEntitlement(r.next);
+      feedback.tick();
+    }
+    setResult(r.kind);
+    setBusy(false);
+  }
+
+  const message: Record<RestoreResult["kind"], string> = {
+    restored: t("License restored from your account."),
+    revoked: t("Your account no longer holds this license (refunded or revoked), so it was removed from this phone."),
+    "up-to-date": t("This phone already has your account's license."),
+    none: t("No license found on this account."),
+    "signed-out": t("Sign in again to restore your license."),
+    unavailable: t("Cloud sync is not set up in this build."),
+    error: t("Could not reach your account. Check the connection and try again."),
+  };
+
+  return (
+    <>
+      <Button variant="ghost" className="col-span-2 w-full text-zinc-300" onClick={() => void restore()} disabled={busy} aria-busy={busy}>
+        {busy ? t("Checking your account...") : t("Restore from account")}
+      </Button>
+      {/* The live region stays in the page, empty, so a result is announced when it arrives. */}
+      {result === "error" ? (
+        <p role="alert" className="col-span-2 text-center text-xs text-[#f87171]">
+          {message.error}
+        </p>
+      ) : (
+        <p role="status" className={`col-span-2 text-center text-xs text-zinc-300 ${result ? "" : "sr-only"}`}>
+          {result ? message[result] : ""}
+        </p>
+      )}
+    </>
+  );
+}

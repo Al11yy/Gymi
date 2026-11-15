@@ -1,0 +1,147 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/** A recording stand-in for AudioContext: every oscillator's wave, frequencies and timing. */
+interface Osc {
+  type: string;
+  set: [number, number][];
+  ramp: [number, number][];
+  start: number;
+  stop: number;
+}
+let oscs: Osc[] = [];
+
+class FakeAudioContext {
+  currentTime = 0;
+  state = "running";
+  destination = {};
+  resume = vi.fn(async () => {});
+  createOscillator() {
+    const o: Osc = { type: "", set: [], ramp: [], start: -1, stop: -1 };
+    oscs.push(o);
+    return {
+      set type(v: string) {
+        o.type = v;
+      },
+      frequency: {
+        setValueAtTime: (v: number, t: number) => o.set.push([v, t]),
+        exponentialRampToValueAtTime: (v: number, t: number) => o.ramp.push([v, t]),
+      },
+      connect: (g: unknown) => g,
+      start: (t: number) => (o.start = t),
+      stop: (t: number) => (o.stop = t),
+    };
+  }
+  createGain() {
+    const gain = { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} };
+    return { gain, connect: (d: unknown) => d };
+  }
+}
+
+beforeEach(() => {
+  oscs = [];
+  vi.resetModules();
+  vi.stubGlobal("window", { AudioContext: FakeAudioContext });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+const load = () => import("./sound-effects");
+const round = (n: number) => Math.round(n * 1000) / 1000;
+
+describe("sound profiles (Phase 2 spec)", () => {
+  it("tick: a 12 ms triangle burst from 1400 Hz down to 300 Hz", async () => {
+    (await load()).playMechanicalTick();
+    expect(oscs).toHaveLength(1);
+    expect(oscs[0].type).toBe("triangle");
+    expect(oscs[0].set[0][0]).toBe(1400);
+    expect(oscs[0].ramp[0][0]).toBe(300);
+    expect(round(oscs[0].ramp[0][1] - oscs[0].start)).toBe(0.012);
+  });
+
+  it("set complete: 600 Hz then 900 Hz within 90 ms", async () => {
+    (await load()).playSetComplete();
+    expect(oscs.map((o) => o.set[0][0])).toEqual([600, 900]);
+    expect(round(Math.max(...oscs.map((o) => o.stop)) - 0.01)).toBe(0.09);
+  });
+
+  it("rest timer zero: three 1000 Hz pulses", async () => {
+    (await load()).playRestTimerZero();
+    expect(oscs.map((o) => o.set[0][0])).toEqual([1000, 1000, 1000]);
+    expect(oscs.map((o) => round(o.start))).toEqual([0, 0.15, 0.3]);
+  });
+
+  it("PR unlocked: the 440, 554, 659, 880 Hz arpeggio in order", async () => {
+    (await load()).playPRUnlocked();
+    expect(oscs.map((o) => Math.round(o.set[0][0]))).toEqual([440, 554, 659, 880]);
+    expect(oscs.map((o) => o.start)).toEqual([...oscs.map((o) => o.start)].sort((a, b) => a - b));
+  });
+
+  it("rest countdown: a single soft 800 Hz pip", async () => {
+    (await load()).playRestCountdown();
+    expect(oscs.map((o) => o.set[0][0])).toEqual([800]);
+  });
+
+  it("workout start: a 220 to 440 Hz glide, then an 880 Hz click", async () => {
+    (await load()).playWorkoutStart();
+    expect(oscs.map((o) => o.set[0][0])).toEqual([220, 880]);
+    expect(oscs[0].ramp[0][0]).toBe(440);
+  });
+
+  it("workout complete: C major rolled upward, one higher note for a record", async () => {
+    const { playWorkoutComplete } = await load();
+    playWorkoutComplete();
+    expect(oscs.map((o) => Math.round(o.set[0][0]))).toEqual([523, 659, 784, 1047]);
+    expect(oscs.map((o) => o.start)).toEqual([...oscs.map((o) => o.start)].sort((a, b) => a - b));
+    oscs = [];
+    playWorkoutComplete(true);
+    expect(oscs.map((o) => Math.round(o.set[0][0]))).toEqual([523, 659, 784, 1047, 1319]);
+  });
+
+  it("pro unlocked: whoosh, impact at 0.42 s, the 600/900 Hz lock, a C major chord, under three seconds", async () => {
+    (await load()).playProUnlocked();
+    const at = (f: number) => oscs.filter((o) => Math.round(o.set[0][0]) === f).map((o) => round(o.start));
+    expect(at(120)).toEqual([0.42]);
+    expect(at(600)).toEqual([0.5]);
+    expect(at(900)).toEqual([0.55]);
+    expect(oscs.filter((o) => round(o.start) === 1).map((o) => Math.round(o.set[0][0])).sort((a, b) => a - b)).toEqual([131, 523, 659, 784, 1047]);
+    expect(Math.max(...oscs.map((o) => o.stop))).toBeLessThan(3.1);
+    // The loudest moment (the chord with the bass) stays well under clipping.
+    const peakAt = (t: number) => oscs.filter((o) => o.start <= t && o.stop > t).length;
+    expect(peakAt(1.05)).toBeLessThanOrEqual(7);
+  });
+
+  it("stays silent without Web Audio instead of throwing", async () => {
+    vi.stubGlobal("window", {});
+    expect((await load()).playMechanicalTick()).toBe(false);
+  });
+});
+
+describe("feedback gate and vibration patterns", () => {
+  it("plays sound and the graduated pattern only while Sounds & vibration is on", async () => {
+    const vibrate = vi.fn();
+    vi.stubGlobal("navigator", { vibrate, userActivation: { hasBeenActive: true } });
+    const { useSettingsStore } = await import("@/store/useSettingsStore");
+    const { feedback } = await import("./feedback");
+
+    useSettingsStore.setState({ tapFeedback: true });
+    feedback.tick();
+    feedback.setComplete();
+    feedback.pr();
+    expect(vibrate.mock.calls.map((c) => c[0])).toEqual([[8], [15, 30, 25], [30, 40, 60, 40, 100]]);
+    const played = oscs.length;
+    expect(played).toBe(1 + 2 + 4);
+
+    feedback.start();
+    feedback.finish(true);
+    expect(vibrate.mock.calls.slice(3).map((c) => c[0])).toEqual([[15, 40, 15], [30, 60, 30, 60, 60]]);
+    expect(oscs.length).toBe(played + 2 + 5);
+
+    useSettingsStore.setState({ tapFeedback: false });
+    const before = oscs.length;
+    feedback.tick();
+    feedback.pr();
+    feedback.start();
+    feedback.finish(false);
+    expect(oscs.length).toBe(before);
+    expect(vibrate).toHaveBeenCalledTimes(5);
+  });
+});

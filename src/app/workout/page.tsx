@@ -1,0 +1,282 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useRoutineStore } from "@/store/useRoutineStore";
+import { Plus, Dumbbell } from "@/components/icons";
+import { useWorkoutStore } from "@/store/useWorkoutStore";
+import { getActivePersistence } from "@/store/persistence";
+import { useSettingsStore } from "@/store/useSettingsStore";
+import { useAllExercises } from "@/store/useExerciseStore";
+import { HydrationGate } from "@/components/ui/Loading";
+import { Button } from "@/components/ui/Button";
+import { ActiveWorkoutHeader } from "@/components/workout/ActiveWorkoutHeader";
+import { ExerciseCard } from "@/components/workout/ExerciseCard";
+import { AnimatePresence, motion } from "framer-motion";
+import { LIST_ITEM } from "@/components/motion/listItem";
+import { ExercisePicker } from "@/components/workout/ExercisePicker";
+import { FinishDialog } from "@/components/workout/FinishDialog";
+import { Sheet } from "@/components/ui/Sheet";
+import { RoutineLibrary } from "@/components/routines/RoutineLibrary";
+import { detectSessionPRs, previousSets, priorPRTable } from "@/lib/calc";
+import { supersetLabels } from "@/lib/superset";
+import { scrollToExercise } from "@/lib/scroll-to-exercise";
+import type { PRKind } from "@/types/workout";
+import { summaryPath } from "@/lib/routes";
+import { autoSyncFinished } from "@/store/useHealthSyncStore";
+import { useT } from "@/i18n";
+import { useReminderStore } from "@/store/useReminderStore";
+import { suggestNext, todaysTargets } from "@/lib/exercise-suggest";
+import { muscleText } from "@/lib/home";
+import { isTimeOfDayName, muscleWorkoutName } from "@/lib/workout-name";
+import { MUSCLE_GROUP_LABELS } from "@/types/workout";
+import { EmptyArt } from "@/components/ui/EmptyArt";
+
+const NO_PRS: Record<string, PRKind[]> = {};
+
+export default function WorkoutPage() {
+  return (
+    <HydrationGate>
+      <WorkoutScreen />
+    </HydrationGate>
+  );
+}
+
+/**
+ * /workout?start=<routine id | "empty">, the target of a reminder's Start button: starts that
+ * routine (or an empty workout) unless one is already running, then cleans the address.
+ */
+function useStartFromLink() {
+  const router = useRouter();
+  const start = useSearchParams().get("start");
+  useEffect(() => {
+    if (!start) return;
+    const w = useWorkoutStore.getState();
+    if (!w.active) {
+      const routine = useRoutineStore.getState().routines.find((r) => r.id === start);
+      if (routine && routine.exercises.length > 0) w.startFromRoutine(routine);
+      else w.startEmpty(useSettingsStore.getState().defaultRestSeconds);
+    }
+    router.replace("/workout");
+  }, [start, router]);
+}
+
+function WorkoutScreen() {
+  useStartFromLink();
+  const router = useRouter();
+  const t = useT();
+  const active = useWorkoutStore((s) => s.active);
+  const sessions = useWorkoutStore((s) => s.sessions);
+  // Actions only: subscribing to the whole store re-rendered the screen on every change.
+  const { addExercise, finishActive, discardActive, completeAllRemaining } = useWorkoutStore.getState();
+  const weightUnit = useSettingsStore((s) => s.weightUnit);
+  const showRpe = useSettingsStore((s) => s.showRpe);
+  const defaultRestSeconds = useSettingsStore((s) => s.defaultRestSeconds);
+  const { byId, list: library } = useAllExercises();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const routines = useRoutineStore((st) => st.routines);
+  const schedule = useReminderStore((st) => st.schedule);
+  // Exercises for today's target muscles not in the workout yet, worked out when the picker opens.
+  const nextUp = useMemo(() => {
+    if (!pickerOpen || !active) return null;
+    const targets = todaysTargets(active, routines, sessions, schedule, byId);
+    if (!targets) return null;
+    const list = suggestNext(active, targets, library, sessions, byId).map((x) => ({
+      exercise: x.exercise,
+      note: t("For {muscle}, not trained yet today", { muscle: muscleText(MUSCLE_GROUP_LABELS[x.muscle], t) }),
+    }));
+    return { routine: targets.routine, list };
+  }, [pickerOpen, active, routines, sessions, schedule, byId, library, t]);
+
+  // /workout?add=1, from "Start an empty workout": an empty session opens on the picker.
+  const addParam = useSearchParams().get("add");
+  const activeCount = active?.exercises.length ?? -1;
+  useEffect(() => {
+    if (addParam !== "1") return;
+    // Next tick: the picker opens once the empty workout is on screen.
+    const id = setTimeout(() => {
+      if (activeCount === 0) setPickerOpen(true);
+      router.replace("/workout");
+    }, 0);
+    return () => clearTimeout(id);
+  }, [addParam, activeCount, router]);
+  const [finishOpen, setFinishOpen] = useState(false);
+  const finishing = useRef(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+
+  // The summary route is fetched while the workout runs, so Finish still lands there with no signal.
+  const activeId = active?.id;
+  useEffect(() => {
+    if (activeId) router.prefetch(summaryPath(activeId));
+  }, [activeId, router]);
+
+  // Mid-superset there is no rest: bring the next exercise of the group up to the thumb.
+  const handoffTo = useWorkoutStore((s) => (s.handoff ? `${s.handoff.sessionExerciseId}:${s.handoff.setIndex}` : null));
+  useEffect(() => {
+    if (!handoffTo) return;
+    // After the tick's re-render, so the card is laid out where it will stay.
+    const id = requestAnimationFrame(() => scrollToExercise(handoffTo.split(":")[0]!));
+    return () => cancelAnimationFrame(id);
+  }, [handoffTo]);
+
+  // History is read once per workout (records to beat, last time's sets), not on every keystroke.
+  const startedAt = active?.startedAt;
+  const locationId = active?.locationId;
+  const baseline = useMemo(
+    () => (activeId && startedAt !== undefined ? priorPRTable({ id: activeId, startedAt }, sessions, byId) : {}),
+    [activeId, startedAt, sessions, byId],
+  );
+  const exerciseKey = active?.exercises.map((e) => e.exerciseId).join(",") ?? "";
+  const previousByExercise = useMemo(() => {
+    const m: Record<string, ReturnType<typeof previousSets>> = {};
+    for (const id of new Set(exerciseKey ? exerciseKey.split(",") : [])) m[id] = previousSets(id, sessions, activeId, { byId, locationId });
+    return m;
+  }, [exerciseKey, sessions, activeId, byId, locationId]);
+  const prs = useMemo(() => (active ? detectSessionPRs(active, sessions, byId, baseline) : []), [active, sessions, byId, baseline]);
+  // One record map per card; ExerciseCard compares it by value, so a card re-renders only when
+  // its own sets or records change.
+  const prByCard = useMemo(() => {
+    const bySet: Record<string, PRKind[]> = {};
+    for (const pr of prs) (bySet[pr.setId] ??= []).push(pr.kind);
+    const out: Record<string, Record<string, PRKind[]>> = {};
+    for (const ex of active?.exercises ?? []) {
+      const value: Record<string, PRKind[]> = {};
+      for (const set of ex.sets) if (bySet[set.id]) value[set.id] = bySet[set.id]!;
+      out[ex.id] = value;
+    }
+    return out;
+  }, [prs, active]);
+
+  if (!active) return <RoutineLibrary />;
+
+  const inWorkout = new Set(active.exercises.map((e) => e.exerciseId));
+  const supersets = supersetLabels(active.exercises);
+  // The furthest card with a set done: finished cards above it fold to one line.
+  const furthest = active.exercises.findLastIndex((e) => e.sets.some((x) => x.completed));
+
+  return (
+    <main className="flex flex-1 flex-col">
+      <ActiveWorkoutHeader session={active} unit={weightUnit} onFinish={() => setFinishOpen(true)} onDiscard={() => setDiscardOpen(true)} />
+
+      <h1 className="sr-only">{t("Active workout: {name}", { name: active.name })}</h1>
+
+      <div className="flex flex-col gap-3 px-3 pt-4">
+        {active.exercises.length === 0 && (
+          <div className="panel flex flex-col gap-3 px-4 py-6 text-center">
+            <EmptyArt icon={Dumbbell} />
+            <p className="text-sm text-text-muted">{t("No exercises yet. Add one below.")}</p>
+          </div>
+        )}
+        <AnimatePresence initial={false}>
+        {active.exercises.map((item, i) => (
+          // layout="position": moving an exercise up or down slides it; removing one closes the gap.
+          <motion.div key={item.id} layout="position" {...LIST_ITEM} transition={{ ...LIST_ITEM.transition, layout: { type: "spring", stiffness: 500, damping: 40 } }}>
+          <ExerciseCard
+            key={item.id}
+            item={item}
+            exercise={byId[item.exerciseId]}
+            previous={previousByExercise[item.exerciseId] ?? null}
+            unit={weightUnit}
+            showRpe={showRpe}
+            prBySet={prByCard[item.id] ?? NO_PRS}
+            canMoveUp={i > 0}
+            movedOn={i < furthest}
+            canMoveDown={i < active.exercises.length - 1}
+            superset={supersets[item.id]}
+            joinedAbove={!!item.supersetId && active.exercises[i - 1]?.supersetId === item.supersetId}
+            joinedBelow={!!item.supersetId && active.exercises[i + 1]?.supersetId === item.supersetId}
+          />
+          </motion.div>
+        ))}
+        </AnimatePresence>
+
+        <button
+          type="button"
+          onClick={() => setPickerOpen(true)}
+          className="flex min-h-14 w-full items-center justify-center gap-2 rounded-card border border-ink/[0.12] bg-surface text-sm font-semibold text-text transition-colors duration-200 hover:border-ink/25 hover:bg-surface-2 active:bg-ink/[0.08]"
+        >
+          <Plus aria-hidden="true" size={18} className="text-accent" />
+          {t("Add exercise")}
+        </button>
+
+        {/* Kept quiet on purpose: Finish is the one action this screen should pull the eye to. */}
+        <button
+          type="button"
+          onClick={() => setDiscardOpen(true)}
+          className="mx-auto mt-6 min-h-11 rounded-ctl px-4 text-xs font-medium text-failure transition-colors hover:bg-failure/10 hover:text-failure"
+        >
+          {t("Discard workout")}
+        </button>
+      </div>
+
+      <ExercisePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        inWorkout={inWorkout}
+        suggestionsTitle={nextUp ? t("Still to train today · {routine}", { routine: nextUp.routine.name }) : undefined}
+        suggestions={nextUp?.list ?? []}
+        onPick={(ex) => {
+          addExercise(ex.id, defaultRestSeconds);
+          setPickerOpen(false);
+        }}
+        onPickMany={(list) => {
+          for (const ex of list) addExercise(ex.id, defaultRestSeconds);
+          setPickerOpen(false);
+        }}
+      />
+
+      <FinishDialog
+        open={finishOpen}
+        session={active}
+        prs={prs}
+        exercisesById={byId}
+        unit={weightUnit}
+        onClose={() => setFinishOpen(false)}
+        onMarkRemaining={() => completeAllRemaining()}
+        onConfirm={async () => {
+          // A second tap while the save is awaited would find no workout and go Home instead.
+          if (finishing.current) return;
+          finishing.current = true;
+          // A workout still called "Evening Workout" is named after what it trained.
+          const named = isTimeOfDayName(active.name, t) ? muscleWorkoutName(active, byId, t) : null;
+          if (named) useWorkoutStore.getState().renameActive(named);
+          const done = finishActive();
+          if (done) autoSyncFinished(done, byId);
+          // The finished workout reaches storage before the screen moves on: closing the app
+          // right after Finish brought it back as a workout in progress. Capped, so a stuck
+          // write never holds the lifter on this screen.
+          await Promise.race([getActivePersistence()?.flush(), new Promise((r) => setTimeout(r, 1500))]);
+          setFinishOpen(false);
+          router.push(done ? summaryPath(done.id) : "/");
+          // The page stays mounted (it shows the routines next), so the next workout can finish.
+          finishing.current = false;
+        }}
+      />
+
+      <Sheet
+        open={discardOpen}
+        onClose={() => setDiscardOpen(false)}
+        title={t("Discard this workout?")}
+        footer={
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={() => setDiscardOpen(false)}>{t("Keep it")}</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                discardActive();
+                setDiscardOpen(false);
+                router.push("/");
+              }}
+            >
+              {t("Discard")}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-text-muted">
+          {t("Everything logged in this workout will be deleted. This cannot be undone.")}
+        </p>
+      </Sheet>
+    </main>
+  );
+}

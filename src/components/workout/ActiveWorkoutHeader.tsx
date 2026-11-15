@@ -1,0 +1,273 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { Select } from "@/components/ui/Select";
+import type { WeightUnit, WorkoutSession } from "@/types/workout";
+import { useWorkoutStore } from "@/store/useWorkoutStore";
+import { useAllExercises } from "@/store/useExerciseStore";
+import { useLocationStore } from "@/store/useLocationStore";
+import { useNow } from "@/lib/useNow";
+import { countSets, formatDuration, sessionDurationSec, sessionVolume } from "@/lib/calc";
+import { formatVolume } from "@/lib/units";
+import { motion } from "framer-motion";
+import { MapPin, MoreHorizontal, Pause, Play, Timer, Trash2 } from "@/components/icons";
+import { Button, press } from "@/components/ui/Button";
+import { Sheet } from "@/components/ui/Sheet";
+import { useT } from "@/i18n";
+import { WorkoutMuscles } from "./WorkoutMuscles";
+
+export function ActiveWorkoutHeader({
+  session,
+  unit,
+  onFinish,
+  onDiscard,
+}: {
+  session: WorkoutSession;
+  unit: WeightUnit;
+  onFinish: () => void;
+  /** Opens the page's discard confirmation. */
+  onDiscard: () => void;
+}) {
+  const t = useT();
+  const rename = useWorkoutStore((s) => s.renameActive);
+  const { byId } = useAllExercises();
+  const volume = sessionVolume(session, byId);
+  const { total, completed } = countSets(session);
+  const [startOpen, setStartOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // One loud action at a time: while sets wait, Done set (on the island and each row) leads;
+  // Finish takes the accent once every set is ticked.
+  const ready = total > 0 && completed === total;
+  const paused = session.pausedAt !== undefined;
+  const locations = useLocationStore((s) => s.locations);
+  const setLocation = useWorkoutStore((s) => s.setLocation);
+
+  return (
+    <header className="px-4 pt-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <label htmlFor="workout-name" className="sr-only">
+            {t("Workout name")}
+          </label>
+          <input
+            id="workout-name"
+            value={session.name}
+            onChange={(e) => rename(e.target.value)}
+            className="h-11 w-full rounded-ctl bg-transparent px-1 text-xl font-bold tracking-tight text-text hover:bg-surface focus:bg-surface"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => setMenuOpen(true)}
+          aria-label={t("Workout options")}
+          aria-haspopup="dialog"
+          className="glass-icon rounded-full flex size-11 shrink-0 items-center justify-center text-text"
+        >
+          <MoreHorizontal aria-hidden="true" size={20} />
+        </button>
+        <motion.button
+          type="button"
+          onClick={onFinish}
+          {...press}
+          className={`min-h-11 shrink-0 rounded-xl px-5 text-sm font-extrabold transition-[filter,background-color] duration-150 ${
+            ready ? "bg-accent text-on-accent shadow-volt hover:brightness-110" : "raised text-text"
+          }`}
+        >
+          {t("Finish")}
+        </motion.button>
+      </div>
+
+      {locations.length > 0 && (
+        <div className="mt-2 flex items-center gap-2">
+          <label htmlFor="workout-gym" className="text-sm text-text-muted">
+            {t("Gym")}
+          </label>
+          <Select
+            id="workout-gym"
+            value={session.locationId ?? ""}
+            onChange={(v) => setLocation(v || undefined)}
+            options={[{ value: "", label: t("No gym") }, ...locations.map((l) => ({ value: l.id, label: l.name }))]}
+            className="flex-1"
+          />
+        </div>
+      )}
+      {locations.length === 0 && (
+        <Link
+          href="/settings?section=gyms"
+          className="mt-1 inline-flex min-h-11 items-center gap-1.5 rounded-ctl px-1 text-sm text-text-muted hover:text-text"
+        >
+          <MapPin aria-hidden="true" size={16} />
+          {t("Add your gym to tag workouts")}
+        </Link>
+      )}
+
+      {/* Three figures and, right of Sets, the muscles worked so far as a small map: four tiles
+          of one size, so the row reads as a set (volume shortens to "12.4k" past 10,000). */}
+      <dl className="mt-3 grid grid-cols-4 gap-2">
+        <div className="tile min-w-0 rounded-xl border border-ink/10 bg-surface px-2 py-2.5">
+          <dt className="field-label flex items-center gap-1.5">
+            {t("Duration")}
+            {paused && <span className="rounded bg-accent px-1.5 text-[11px] font-bold normal-case tracking-normal text-on-accent">{t("Paused")}</span>}
+          </dt>
+          <dd>
+            <DurationButton session={session} paused={paused} onOpen={() => setStartOpen(true)} />
+          </dd>
+        </div>
+        <Stat label={t("Volume")} value={formatVolume(volume, unit)} />
+        <Stat label={t("Sets")} value={String(completed)} small={`/${total}`} />
+        <WorkoutMuscles session={session} byId={byId} />
+      </dl>
+      <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title={t("Workout options")}>
+        <div className="flex flex-col gap-2">
+          <Button
+            onClick={() => {
+              setMenuOpen(false);
+              setStartOpen(true);
+            }}
+          >
+            <Timer aria-hidden="true" size={18} /> {t("Workout timer")}
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              setMenuOpen(false);
+              onDiscard();
+            }}
+          >
+            <Trash2 aria-hidden="true" size={18} /> {t("Discard workout")}
+          </Button>
+        </div>
+      </Sheet>
+      {startOpen && <StartTimeSheet startedAt={session.startedAt} paused={paused} onClose={() => setStartOpen(false)} />}
+    </header>
+  );
+}
+
+function Stat({ label, value, small }: { label: string; value: string; small?: string }) {
+  // The unit (or a set total) is set small, so "1,360 kg" and "12/16" keep the figure whole in a
+  // quarter of a 360 px screen.
+  const m = small !== undefined ? [value, value, small] : /^(.*) (kg|lbs)$/.exec(value);
+  return (
+    <div className="tile min-w-0 rounded-xl border border-ink/10 bg-surface px-2 py-2.5">
+      <dt className="field-label truncate">{label}</dt>
+      <dd className="num flex min-h-11 items-baseline truncate pt-2 text-lg font-bold tracking-tight text-text">
+        {m ? (
+          <>
+            {m[1]}
+            {/* The space sits inside the small unit, so it reads "480 kg" and stays narrow. */}
+            <span className={`text-[11px] font-semibold text-text-muted ${small !== undefined ? "" : "pl-1"}`}>{small !== undefined ? m[2] : ` ${m[2]}`}</span>
+          </>
+        ) : (
+          value
+        )}
+      </dd>
+    </div>
+  );
+}
+
+/** Tapping the duration: pause or resume the clock, or move the start time. */
+function StartTimeSheet({ startedAt, paused, onClose }: { startedAt: number; paused: boolean; onClose: () => void }) {
+  const t = useT();
+  const setStartedAt = useWorkoutStore((s) => s.setStartedAt);
+  const pause = useWorkoutStore((s) => s.pauseActive);
+  const resume = useWorkoutStore((s) => s.resumeActive);
+  const d = new Date(startedAt);
+  const [value, setValue] = useState(
+    `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  function save() {
+    const [h, m] = value.split(":").map(Number);
+    if (h === undefined || m === undefined || Number.isNaN(h) || Number.isNaN(m)) {
+      setError(t("Enter a time like 07:30"));
+      return;
+    }
+    // Same calendar day as the original start; a workout rarely spans midnight.
+    const next = new Date(startedAt);
+    next.setHours(h, m, 0, 0);
+    const r = setStartedAt(next.getTime());
+    if (r.ok) onClose();
+    else setError(t(r.reason));
+  }
+
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title={t("Workout timer")}
+      footer={
+        <div className="grid grid-cols-2 gap-2">
+          <Button onClick={onClose}>{t("Cancel")}</Button>
+          <Button variant="primary" onClick={save}>
+            {t("Save start time")}
+          </Button>
+        </div>
+      }
+    >
+      <Button
+        variant={paused ? "primary" : "secondary"}
+        onClick={() => {
+          if (paused) resume();
+          else pause();
+          onClose();
+        }}
+        className="mb-1 w-full"
+      >
+        {paused ? <Play aria-hidden="true" size={16} /> : <Pause aria-hidden="true" size={16} />}
+        {paused ? t("Resume workout timer") : t("Pause workout timer")}
+      </Button>
+      <p className="mb-4 text-xs text-text-muted">
+        {paused
+          ? t("The clock is stopped. Ticking a set also resumes it.")
+          : t("Stops the clock. Tick a set to resume.")}
+      </p>
+      <label htmlFor="start-time" className="mb-1 block text-sm font-semibold">
+        {t("Started at")}
+      </label>
+      <input
+        id="start-time"
+        type="time"
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setError(null);
+        }}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? "start-time-error" : "start-time-hint"}
+        className="h-11 w-full rounded-ctl border border-line-strong bg-surface-2 px-3 text-base [color-scheme:dark]"
+      />
+      {error ? (
+        <p id="start-time-error" role="alert" className="mt-1 text-xs text-failure">
+          {error}
+        </p>
+      ) : (
+        <p id="start-time-hint" className="mt-1 text-xs text-text-muted">
+          {t("Started late? Set the real start time.")}
+        </p>
+      )}
+    </Sheet>
+  );
+}
+
+/** The ticking clock on its own, so only this button re-renders each second, not the header. */
+function DurationButton({ session, paused, onOpen }: { session: WorkoutSession; paused: boolean; onOpen: () => void }) {
+  const t = useT();
+  const duration = sessionDurationSec(session, useNow(1000));
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-haspopup="dialog"
+      aria-label={
+        paused
+          ? t("Duration {time}, paused. Pause or adjust the timer", { time: formatDuration(duration) })
+          : t("Duration {time}. Pause or adjust the timer", { time: formatDuration(duration) })
+      }
+      className="num -mx-1 flex min-h-11 w-[calc(100%+8px)] items-center rounded-ctl px-1 text-lg font-bold tracking-tight text-text underline decoration-line-strong decoration-dotted underline-offset-4 hover:bg-surface-2"
+    >
+      {formatDuration(duration)}
+    </button>
+  );
+}

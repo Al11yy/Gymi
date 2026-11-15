@@ -1,0 +1,305 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Play, Plus, ListChecks } from "@/components/icons";
+import { useRoutineStore } from "@/store/useRoutineStore";
+import { useWorkoutStore } from "@/store/useWorkoutStore";
+import { useAllExercises } from "@/store/useExerciseStore";
+import { useSettingsStore } from "@/store/useSettingsStore";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Button } from "@/components/ui/Button";
+import { Sheet } from "@/components/ui/Sheet";
+import type { Routine } from "@/types/workout";
+import { Tabs, tabPanelProps } from "@/components/ui/Tabs";
+import { TemplateVault } from "@/components/routines/TemplateVault";
+import { RoutineCard } from "@/components/routines/RoutineCard";
+import { routineEditPath } from "@/lib/routes";
+import { useT, type T } from "@/i18n";
+import { useReminderStore } from "@/store/useReminderStore";
+import { useNow } from "@/lib/useNow";
+import { nextProtocol, type NextProtocol } from "@/lib/home";
+import { lastDoneByRoutine, lastDoneText } from "@/lib/routine-history";
+import { AnimatePresence, motion } from "framer-motion";
+import { LIST_ITEM } from "@/components/motion/listItem";
+import { useShake } from "@/lib/useShake";
+import { EmptyArt } from "@/components/ui/EmptyArt";
+import { ViewToggle, useViewMode } from "@/components/ui/ViewToggle";
+
+/**
+ * The Workout tab when no workout is running: an empty start, then My Routines and the Template
+ * Vault. Routines used to be their own tab; training starts here now.
+ */
+export function RoutineLibrary() {
+  const router = useRouter();
+  const routines = useRoutineStore((s) => s.routines);
+  const { create, remove, duplicate } = useRoutineStore();
+  const active = useWorkoutStore((s) => s.active);
+  const startFromRoutine = useWorkoutStore((s) => s.startFromRoutine);
+  const startEmpty = useWorkoutStore((s) => s.startEmpty);
+  const defaultRest = useSettingsStore((s) => s.defaultRestSeconds);
+  const { byId } = useAllExercises();
+  const sessions = useWorkoutStore((s) => s.sessions);
+  const schedule = useReminderStore((s) => s.schedule);
+  const now = useNow(60_000);
+  const t = useT();
+  const lastDone = useMemo(() => lastDoneByRoutine(sessions), [sessions]);
+  // What to train today: the schedule's routine, else the one after the last trained.
+  const next = useMemo(() => nextProtocol(routines, sessions, schedule, now), [routines, sessions, schedule, now]);
+
+  const [newOpen, setNewOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newFolder, setNewFolder] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
+  const { controls, shake } = useShake();
+  const [toDelete, setToDelete] = useState<Routine | null>(null);
+  const [startBlocked, setStartBlocked] = useState<Routine | null>(null);
+  // Someone with no routines yet lands on the templates.
+  const [tab, setTab] = useState<"mine" | "vault">(() => (routines.length > 0 ? "mine" : "vault"));
+  const [view, setView] = useViewMode("routines");
+
+  const folders = new Map<string, Routine[]>();
+  for (const r of [...routines].sort((a, b) => a.name.localeCompare(b.name))) {
+    const key = r.folder?.trim() || "";
+    folders.set(key, [...(folders.get(key) ?? []), r]);
+  }
+  const folderNames = [...folders.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+  const existingFolders = folderNames.filter(Boolean);
+
+  function start(r: Routine) {
+    if (active) {
+      setStartBlocked(r);
+      return;
+    }
+    startFromRoutine(r);
+    router.push("/workout");
+  }
+
+  function submitNew() {
+    const name = newName.trim();
+    if (!name) {
+      setNameError(t("Give the routine a name, like Push A or Leg day"));
+      shake();
+      return;
+    }
+    const r = create(name, newFolder.trim() || undefined);
+    setNewOpen(false);
+    setNewName("");
+    setNewFolder("");
+    router.push(routineEditPath(r.id));
+  }
+
+  return (
+    <main className="flex flex-1 flex-col">
+      <PageHeader
+        title={t("Workout")}
+        action={
+          <Button onClick={() => setNewOpen(true)}>
+            <Plus aria-hidden="true" size={18} /> {t("New routine")}
+          </Button>
+        }
+      />
+
+      <div className="flex flex-col gap-4 px-4 pt-3">
+        {next && (
+          <section aria-labelledby="today-routine" className="rounded-card border border-accent/40 bg-accent-tint p-4">
+            <p className="field-label">{whyText(next.why, t)}</p>
+            <h2 id="today-routine" className="mt-1 truncate text-xl font-bold tracking-tight">
+              {next.routine.name}
+            </h2>
+            <p className="mt-0.5 text-xs text-text-muted">
+              {[t.n(next.routine.exercises.length, "{n} exercise", "{n} exercises"), lastDoneText(lastDone[next.routine.id], now, t)].join(" · ")}
+            </p>
+            <Button variant="primary" onClick={() => start(next.routine)} aria-label={t("Start today: {name}", { name: next.routine.name })} className="mt-3 min-h-12 w-full text-base">
+              <Play aria-hidden="true" size={18} />
+              {t("Start")}
+            </Button>
+          </section>
+        )}
+        <Button
+          variant={next ? "secondary" : "primary"}
+          onClick={() => {
+            startEmpty(defaultRest);
+            // Straight to picking what to do: an empty workout has nothing else to show.
+            router.push("/workout?add=1");
+          }}
+          className="min-h-12 w-full text-base"
+        >
+          {t("Start an empty workout")}
+        </Button>
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <Tabs
+              id="routines"
+              label={t("Routines")}
+              tabs={[
+                { value: "mine", label: t("My Routines") },
+                { value: "vault", label: t("Templates") },
+              ]}
+              value={tab}
+              onChange={setTab}
+            />
+          </div>
+          {/* List or a two-column grid, for both tabs; remembered on this phone. */}
+          <ViewToggle value={view} onChange={setView} />
+        </div>
+        {tab === "mine" ? (
+        <div {...tabPanelProps("routines", "mine")} className="flex flex-col gap-6 outline-none">
+          {routines.length === 0 && (
+            <div className="panel flex flex-col gap-3 px-4 py-8 text-center">
+              <EmptyArt icon={ListChecks} />
+              <p className="text-sm text-text-muted">
+                {t(
+                  "No routines yet. Save one to start it in one tap.",
+                )}
+              </p>
+            </div>
+          )}
+
+          {folderNames.map((folder) => (
+            <section key={folder || "__none"} aria-labelledby={`folder-${folder || "none"}`}>
+              <h2 id={`folder-${folder || "none"}`} className="text-sm font-semibold text-text-muted">
+                {folder || (folderNames.length > 1 ? t("No folder") : t("All routines"))}
+              </h2>
+              <ul className={`mt-2 ${view === "grid" ? "grid grid-cols-2 gap-3" : "flex flex-col gap-3"}`}>
+                <AnimatePresence initial={false}>
+                  {folders.get(folder)!.map((r) => (
+                    <motion.li key={r.id} {...LIST_ITEM} className="overflow-hidden">
+                      <RoutineCard grid={view === "grid"} routine={r} byId={byId} lastDone={lastDoneText(lastDone[r.id], now, t)} onStart={() => start(r)} onDuplicate={() => duplicate(r.id)} onDelete={() => setToDelete(r)} />
+                    </motion.li>
+                  ))}
+                </AnimatePresence>
+              </ul>
+            </section>
+          ))}
+        </div>
+        ) : (
+          <div {...tabPanelProps("routines", "vault")} className="outline-none">
+            <TemplateVault onStart={start} grid={view === "grid"} />
+          </div>
+        )}
+      </div>
+
+      <Sheet
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        title={t("New routine")}
+        footer={
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={() => setNewOpen(false)}>{t("Cancel")}</Button>
+            <Button variant="primary" onClick={submitNew}>
+              {t("Create and add exercises")}
+            </Button>
+          </div>
+        }
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitNew();
+          }}
+          className="flex flex-col gap-4"
+        >
+          <div>
+            <label htmlFor="routine-name" className="mb-1 block text-sm font-semibold">
+              {t("Name")}
+            </label>
+            <motion.input
+              animate={controls}
+              id="routine-name"
+              value={newName}
+              onChange={(e) => {
+                setNewName(e.target.value);
+                setNameError(null);
+              }}
+              aria-invalid={nameError ? true : undefined}
+              aria-describedby={nameError ? "routine-name-error" : undefined}
+              placeholder="Push A"
+              autoFocus
+              className="h-11 w-full rounded-ctl border border-line-strong bg-surface-2 px-3 text-base placeholder:text-text-muted"
+            />
+            {nameError && (
+              <p id="routine-name-error" role="alert" className="mt-1 text-xs text-failure">
+                {nameError}
+              </p>
+            )}
+          </div>
+          <div>
+            <label htmlFor="routine-folder" className="mb-1 block text-sm font-semibold">
+              {t("Folder")} <span className="font-normal text-text-muted">{t("(optional, e.g. Push / Pull / Legs)")}</span>
+            </label>
+            <input
+              id="routine-folder"
+              list="routine-folders"
+              value={newFolder}
+              onChange={(e) => setNewFolder(e.target.value)}
+              placeholder="Push / Pull / Legs"
+              className="h-11 w-full rounded-ctl border border-line-strong bg-surface-2 px-3 text-base placeholder:text-text-muted"
+            />
+            <datalist id="routine-folders">
+              {existingFolders.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
+          </div>
+          <button type="submit" className="sr-only">
+            {t("Create")}
+          </button>
+        </form>
+      </Sheet>
+
+
+
+      <Sheet
+        open={toDelete !== null}
+        onClose={() => setToDelete(null)}
+        title={t("Delete {name}?", { name: toDelete?.name ?? t("routine") })}
+        footer={
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={() => setToDelete(null)}>{t("Keep it")}</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (toDelete) remove(toDelete.id);
+                setToDelete(null);
+              }}
+            >
+              {t("Delete")}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-text-muted">
+          {t("Workouts you already logged from it are kept. Only the template is deleted.")}
+        </p>
+      </Sheet>
+
+      <Sheet
+        open={startBlocked !== null}
+        onClose={() => setStartBlocked(null)}
+        title={t("A workout is already in progress")}
+        footer={
+          <div className="grid grid-cols-2 gap-2">
+            <Button onClick={() => setStartBlocked(null)}>{t("Cancel")}</Button>
+            <Button variant="primary" onClick={() => router.push("/workout")}>
+              {t("Go to current workout")}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-text-muted">
+          {t("Finish or discard the current workout before starting {name}.", { name: startBlocked?.name ?? "" })}
+        </p>
+      </Sheet>
+    </main>
+  );
+}
+
+/** Why this routine is today's: the schedule's day, or the routine it follows. */
+function whyText(why: NextProtocol["why"], t: T): string {
+  if (why.kind === "today") return t("Scheduled today");
+  if (why.kind === "tomorrow") return t("Scheduled tomorrow");
+  if (why.kind === "weekday") return t("Scheduled {day}", { day: new Date(2026, 0, 4 + why.weekday).toLocaleDateString(t.locale, { weekday: "long" }) });
+  if (why.kind === "after") return t("Next after {name}", { name: why.after });
+  return t("Your routine");
+}
